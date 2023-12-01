@@ -24,6 +24,7 @@ def format_csv(path: str, trans: str = "railway"):
     label_list = []
     index_list = []
     feature_list = []
+    real_index = 0
 
     # make the whole interact process into 2 links: get_on (label = 0) and get_off (label = 1)
     for index, row in user_data.iterrows():
@@ -52,15 +53,17 @@ def format_csv(path: str, trans: str = "railway"):
         station_id_list.append(station_id_map[get_on_station])
         time_list.append(get_on_time)
         label_list.append(0)
-        index_list.append(index * 2)
+        index_list.append(real_index * 2)
         feature_list.append([0.0 for _ in range(172)])
 
         user_id_list.append(user_id_map[user])
         station_id_list.append(station_id_map[get_off_station])
         time_list.append(get_off_time)
         label_list.append(1)
-        index_list.append(index * 2 + 1)
+        index_list.append(real_index * 2 + 1)
         feature_list.append([0.0 for _ in range(172)])
+
+        real_index += 1
 
     df = pd.DataFrame({'u': user_id_list,
                        'i': station_id_list,
@@ -69,7 +72,7 @@ def format_csv(path: str, trans: str = "railway"):
                        'idx': index_list})
     df = df.sort_values(by = "ts", ascending = True)
 
-    return df, feature_list
+    return df, np.array(feature_list)
 
 
 if __name__ == '__main__':
