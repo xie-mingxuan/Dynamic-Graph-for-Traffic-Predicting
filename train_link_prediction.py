@@ -141,6 +141,7 @@ if __name__ == "__main__":
         early_stopping = EarlyStopping(patience=args.patience, save_model_folder=save_model_folder,
                                        save_model_name=args.save_model_name, logger=logger, model_name=args.model_name)
 
+        # TODO 修改为新的 LOSS 函数
         loss_func = nn.BCELoss()
 
         for epoch in range(args.num_epochs):
