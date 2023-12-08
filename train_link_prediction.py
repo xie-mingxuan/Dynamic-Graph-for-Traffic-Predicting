@@ -16,6 +16,7 @@ from models.CAWN import CAWN
 from models.TCL import TCL
 from models.GraphMixer import GraphMixer
 from models.DyGFormer import DyGFormer
+from models.TrafficLoss import TrafficLoss
 from models.modules import MergeLayer
 from utils.utils import set_random_seed, convert_to_gpu, get_parameter_sizes, create_optimizer
 from utils.utils import get_neighbor_sampler, NegativeEdgeSampler
@@ -31,6 +32,9 @@ if __name__ == "__main__":
 
     # get arguments
     args = get_link_prediction_args(is_evaluation=False)
+
+    # TODO 将预测上车/下车加入参数中
+    predict_get_on = False
 
     # get data for training, validation and testing
     node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, new_node_val_data, new_node_test_data = \
@@ -123,6 +127,7 @@ if __name__ == "__main__":
                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device)
         else:
             raise ValueError(f"Wrong value for model_name {args.model_name}!")
+        # output the link probability of two nodes
         link_predictor = MergeLayer(input_dim1=node_raw_features.shape[1], input_dim2=node_raw_features.shape[1],
                                     hidden_dim=node_raw_features.shape[1], output_dim=1)
         model = nn.Sequential(dynamic_backbone, link_predictor)
@@ -141,8 +146,9 @@ if __name__ == "__main__":
         early_stopping = EarlyStopping(patience=args.patience, save_model_folder=save_model_folder,
                                        save_model_name=args.save_model_name, logger=logger, model_name=args.model_name)
 
-        # TODO 修改为新的 LOSS 函数
-        loss_func = nn.BCELoss()
+        # 修改为新的 LOSS 函数
+        # loss_func = nn.BCELoss()
+        loss_func = TrafficLoss(method="railway", direction="get_on" if predict_get_on else "get_off")
 
         for epoch in range(args.num_epochs):
 
@@ -159,12 +165,14 @@ if __name__ == "__main__":
             train_idx_data_loader_tqdm = tqdm(train_idx_data_loader, ncols=120)
             for batch_idx, train_data_indices in enumerate(train_idx_data_loader_tqdm):
                 train_data_indices = train_data_indices.numpy()
-                batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids = \
+                batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids, get_on_off_labels = \
                     train_data.src_node_ids[train_data_indices], train_data.dst_node_ids[train_data_indices], \
-                    train_data.node_interact_times[train_data_indices], train_data.edge_ids[train_data_indices]
+                        train_data.node_interact_times[train_data_indices], train_data.edge_ids[train_data_indices], train_data.labels[train_data_indices]
 
                 _, batch_neg_dst_node_ids = train_neg_edge_sampler.sample(size=len(batch_src_node_ids))
                 batch_neg_src_node_ids = batch_src_node_ids
+
+                # TODO 将这里改为对所有的车站进行循环，通过比较预测概率决定最终车站，然后计算loss
 
                 # we need to compute for positive and negative edges respectively, because the new sampling strategy (for evaluation) allows the negative source nodes to be
                 # different from the source nodes, this is different from previous works that just replace destination nodes with negative destination nodes
@@ -245,13 +253,19 @@ if __name__ == "__main__":
                 negative_probabilities = model[1](input_1=batch_neg_src_node_embeddings, input_2=batch_neg_dst_node_embeddings).squeeze(dim=-1).sigmoid()
 
                 predicts = torch.cat([positive_probabilities, negative_probabilities], dim=0)
-                labels = torch.cat([torch.ones_like(positive_probabilities), torch.zeros_like(negative_probabilities)], dim=0)
+                # 为实际存在的边添加标签 1
+                truth = torch.cat([torch.ones_like(positive_probabilities), torch.zeros_like(negative_probabilities)], dim=0)
+                # 记录正负样本的下车/上车车站
+                get_on_off_station_ids = torch.cat([batch_src_node_ids, batch_src_node_ids] if predict_get_on else [batch_dst_node_ids, batch_neg_dst_node_ids], dim=0)
+                # 为真实下车数据添加标签 1
+                # 由于 negative_source_id 和 source_id 是一样的，所以可以直接使用正样本的上下车标签作为负样本的上下车标签
+                label = torch.cat([torch.from_numpy(get_on_off_labels), torch.from_numpy(get_on_off_labels)], dim=0)
 
-                loss = loss_func(input=predicts, target=labels)
+                loss = loss_func(input=predicts, target=truth, label=label)
 
                 train_losses.append(loss.item())
 
-                train_metrics.append(get_link_prediction_metrics(predicts=predicts, labels=labels))
+                train_metrics.append(get_link_prediction_metrics(predicts=predicts, labels=truth))
 
                 optimizer.zero_grad()
                 loss.backward()

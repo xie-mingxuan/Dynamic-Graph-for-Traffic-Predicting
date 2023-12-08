@@ -69,10 +69,10 @@ def reindex(df: pd.DataFrame, bipartite: bool = True):
         assert df.u.min() == df.i.min() == 0
 
         # if bipartite, discriminate the source and target node by unique ids (target node id is counted based on source node id)
-        upper_u = df.u.max() + 1
-        new_i = df.i + upper_u
+        upper_station = df.i.max() + 1
+        new_u = df.u + upper_station
 
-        new_df.i = new_i
+        new_df.u = new_u
 
     # make the id start from 1
     new_df.u += 1

@@ -11,8 +11,8 @@ def format_csv(path: str, trans: str = "railway"):
     :return: a format dataset
     """
 
-    with open(path, 'r', encoding = "utf-8", errors = "ignore") as f:
-        user_data = pd.read_csv(f, header = None, dtype = str)
+    with open(path, 'r', encoding="utf-8", errors="ignore") as f:
+        user_data = pd.read_csv(f, header=None, dtype=str)
 
     user_id_map = {}
     user_id_list = []
@@ -49,6 +49,7 @@ def format_csv(path: str, trans: str = "railway"):
             station_id_map[get_off_station] = unique_station_id_index
             unique_station_id_index += 1
 
+        # mark get_on data as label 0, get_off data as label 1
         user_id_list.append(user_id_map[user])
         station_id_list.append(station_id_map[get_on_station])
         time_list.append(get_on_time)
@@ -70,7 +71,7 @@ def format_csv(path: str, trans: str = "railway"):
                        'ts': time_list,
                        'label': label_list,
                        'idx': index_list})
-    df = df.sort_values(by = "ts", ascending = True)
+    df = df.sort_values(by="ts", ascending=True)
 
     return df, np.array(feature_list)
 

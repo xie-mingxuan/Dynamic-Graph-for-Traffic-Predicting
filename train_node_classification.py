@@ -16,6 +16,7 @@ from models.CAWN import CAWN
 from models.TCL import TCL
 from models.GraphMixer import GraphMixer
 from models.DyGFormer import DyGFormer
+from models.TrafficLoss import TrafficLoss
 from models.modules import MergeLayer, MLPClassifier
 from utils.utils import set_random_seed, convert_to_gpu, get_parameter_sizes, create_optimizer
 from utils.utils import get_neighbor_sampler
@@ -145,7 +146,9 @@ if __name__ == "__main__":
         early_stopping = EarlyStopping(patience=args.patience, save_model_folder=save_model_folder,
                                        save_model_name=args.save_model_name, logger=logger, model_name=args.model_name)
 
-        loss_func = nn.BCELoss()
+        # convert loss function to TrafficLoss
+        # loss_func = nn.BCELoss()
+        loss_func = TrafficLoss()
 
         # set the dynamic_backbone in evaluation mode
         model[0].eval()
@@ -167,7 +170,7 @@ if __name__ == "__main__":
                 train_data_indices = train_data_indices.numpy()
                 batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids, batch_labels = \
                     train_data.src_node_ids[train_data_indices], train_data.dst_node_ids[train_data_indices], train_data.node_interact_times[train_data_indices], \
-                    train_data.edge_ids[train_data_indices], train_data.labels[train_data_indices]
+                        train_data.edge_ids[train_data_indices], train_data.labels[train_data_indices]
 
                 with torch.no_grad():
                     if args.model_name in ['TGAT', 'CAWN', 'TCL']:

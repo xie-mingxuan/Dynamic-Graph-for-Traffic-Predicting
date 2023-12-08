@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 
 def save_subway_info(filepath: str):
@@ -10,7 +11,8 @@ def save_subway_info(filepath: str):
     """
     df = pd.read_csv(filepath, encoding='utf-8')
     station_list = []
-    for index, row in df.iterrows():
+    iterable = tqdm(df.iterrows(), total=df.shape[0], desc="Saving subway info")
+    for index, row in iterable:
         if row["station"] not in station_list:
             station_list.append(row["station"])
     station_array = np.array(station_list)
@@ -31,7 +33,8 @@ def save_station_distance(info_path: str, distance_path: str):
     np.fill_diagonal(distance_matrix, 0)
 
     df = pd.read_csv(distance_path)
-    for index, row in df.iterrows():
+    iterable = tqdm(df.iterrows(), total=df.shape[0], desc="Saving subway distance")
+    for index, row in iterable:
         get_on_station = row["station1"]
         get_off_station = row["station2"]
         get_on_station_id = np.where(station_array == get_on_station)[0][0]
@@ -47,19 +50,34 @@ def save_station_distance(info_path: str, distance_path: str):
 
 def floyd_warshall(matrix_path: str):
     """
-    floyd 算法，用于从得到的邻接矩阵中计算出任意两点之间的最短距离
+    Floyd 算法，用于从得到的邻接矩阵中计算出任意两点之间的最短距离和最少站点数
     :param matrix_path: 邻接矩阵路径
     """
     adjacency_matrix = np.load(matrix_path)
     num_vertices = adjacency_matrix.shape[0]
+
     # 初始化距离矩阵
     distance_matrix = np.copy(adjacency_matrix)
-    for k in range(num_vertices):
+    # 初始化站点数矩阵
+    station_matrix = np.zeros_like(adjacency_matrix, dtype=int)
+
+    # 填充站点数矩阵
+    for i in range(num_vertices):
+        for j in range(num_vertices):
+            if i != j and adjacency_matrix[i, j] != np.inf:
+                station_matrix[i, j] = 1
+
+    for k in tqdm(range(num_vertices), desc="Calculating shortest paths"):
         for i in range(num_vertices):
             for j in range(num_vertices):
-                distance_matrix[i, j] = min(distance_matrix[i, j], distance_matrix[i, k] + distance_matrix[k, j])
+                # 更新距离矩阵
+                if distance_matrix[i, j] > distance_matrix[i, k] + distance_matrix[k, j]:
+                    distance_matrix[i, j] = distance_matrix[i, k] + distance_matrix[k, j]
+                    # 同时更新站点数矩阵
+                    station_matrix[i, j] = station_matrix[i, k] + station_matrix[k, j]
 
     np.save("../DG_data/station_distance.npy", distance_matrix)
+    np.save("../DG_data/station_count.npy", station_matrix)
 
 
 if __name__ == '__main__':
@@ -69,6 +87,8 @@ if __name__ == '__main__':
     station_array = np.load("../DG_data/station_info_list.npy")
     neighbor_distance_matrix = np.load("../DG_data/station_neighbor_distance.npy")
     distance_matrix = np.load("../DG_data/station_distance.npy")
+    station_matrix = np.load("../DG_data/station_count.npy")
     print(station_array.size)
     print(neighbor_distance_matrix.size)
     print(distance_matrix.size)
+    print(station_matrix.size)

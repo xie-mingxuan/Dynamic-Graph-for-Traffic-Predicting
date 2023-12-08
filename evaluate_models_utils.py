@@ -18,7 +18,7 @@ from utils.DataLoader import Data
 
 def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_sampler: NeighborSampler, evaluate_idx_data_loader: DataLoader,
                                    evaluate_neg_edge_sampler: NegativeEdgeSampler, evaluate_data: Data, loss_func: nn.Module,
-                                   num_neighbors: int = 20, time_gap: int = 2000):
+                                   num_neighbors: int = 20, time_gap: int = 2000, predict_get_on: bool = False):
     """
     evaluate models on the link prediction task
     :param model_name: str, name of the model
@@ -30,6 +30,7 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
     :param loss_func: nn.Module, loss function
     :param num_neighbors: int, number of neighbors to sample for each node
     :param time_gap: int, time gap for neighbors to compute node features
+    :param predict_get_on: if the job is to predict get on station
     :return:
     """
     # Ensures the random sampler uses a fixed seed for evaluation (i.e. we always sample the same negatives for validation / test set)
@@ -48,9 +49,9 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
         evaluate_idx_data_loader_tqdm = tqdm(evaluate_idx_data_loader, ncols=120)
         for batch_idx, evaluate_data_indices in enumerate(evaluate_idx_data_loader_tqdm):
             evaluate_data_indices = evaluate_data_indices.numpy()
-            batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids = \
-                evaluate_data.src_node_ids[evaluate_data_indices],  evaluate_data.dst_node_ids[evaluate_data_indices], \
-                evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices]
+            batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids, get_on_off_labels = \
+                evaluate_data.src_node_ids[evaluate_data_indices], evaluate_data.dst_node_ids[evaluate_data_indices], \
+                    evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices], evaluate_data.labels[evaluate_data_indices]
 
             if evaluate_neg_edge_sampler.negative_sample_strategy != 'random':
                 batch_neg_src_node_ids, batch_neg_dst_node_ids = evaluate_neg_edge_sampler.sample(size=len(batch_src_node_ids),
@@ -141,13 +142,19 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
             negative_probabilities = model[1](input_1=batch_neg_src_node_embeddings, input_2=batch_neg_dst_node_embeddings).squeeze(dim=-1).sigmoid()
 
             predicts = torch.cat([positive_probabilities, negative_probabilities], dim=0)
-            labels = torch.cat([torch.ones_like(positive_probabilities), torch.zeros_like(negative_probabilities)], dim=0)
+            # 为实际存在的边添加标签 1
+            truth = torch.cat([torch.ones_like(positive_probabilities), torch.zeros_like(negative_probabilities)], dim=0)
+            # 记录正负样本的下车/上车车站
+            get_on_off_station_ids = torch.cat([batch_src_node_ids, batch_src_node_ids] if predict_get_on else [batch_dst_node_ids, batch_neg_dst_node_ids], dim=0)
+            # 为真实下车数据添加标签 1
+            # 由于 negative_source_id 和 source_id 是一样的，所以可以直接使用正样本的上下车标签作为负样本的上下车标签
+            label = torch.cat([torch.from_numpy(get_on_off_labels), torch.from_numpy(get_on_off_labels)], dim=0)
 
-            loss = loss_func(input=predicts, target=labels)
+            loss = loss_func(input=predicts, target=truth, label=label)
 
             evaluate_losses.append(loss.item())
 
-            evaluate_metrics.append(get_link_prediction_metrics(predicts=predicts, labels=labels))
+            evaluate_metrics.append(get_link_prediction_metrics(predicts=predicts, labels=truth))
 
             evaluate_idx_data_loader_tqdm.set_description(f'evaluate for the {batch_idx + 1}-th batch, evaluate loss: {loss.item()}')
 
@@ -181,8 +188,8 @@ def evaluate_model_node_classification(model_name: str, model: nn.Module, neighb
         for batch_idx, evaluate_data_indices in enumerate(evaluate_idx_data_loader_tqdm):
             evaluate_data_indices = evaluate_data_indices.numpy()
             batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids, batch_labels = \
-                evaluate_data.src_node_ids[evaluate_data_indices],  evaluate_data.dst_node_ids[evaluate_data_indices], \
-                evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices], evaluate_data.labels[evaluate_data_indices]
+                evaluate_data.src_node_ids[evaluate_data_indices], evaluate_data.dst_node_ids[evaluate_data_indices], \
+                    evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices], evaluate_data.labels[evaluate_data_indices]
 
             if model_name in ['TGAT', 'CAWN', 'TCL']:
                 # get temporal embedding of source and destination nodes
@@ -310,7 +317,7 @@ def evaluate_edge_bank_link_prediction(args: argparse.Namespace, train_data: Dat
             test_data_indices = test_data_indices.numpy()
             batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times = \
                 test_data.src_node_ids[test_data_indices], test_data.dst_node_ids[test_data_indices], \
-                test_data.node_interact_times[test_data_indices]
+                    test_data.node_interact_times[test_data_indices]
 
             if test_neg_edge_sampler.negative_sample_strategy != 'random':
                 batch_neg_src_node_ids, batch_neg_dst_node_ids = test_neg_edge_sampler.sample(size=len(batch_src_node_ids),
@@ -372,7 +379,7 @@ def evaluate_edge_bank_link_prediction(args: argparse.Namespace, train_data: Dat
 
         # save model result
         result_json = {
-            "test metrics": {metric_name: f'{test_metric_dict[metric_name]:.4f}'for metric_name in test_metric_dict}
+            "test metrics": {metric_name: f'{test_metric_dict[metric_name]:.4f}' for metric_name in test_metric_dict}
         }
         result_json = json.dumps(result_json, indent=4)
 
