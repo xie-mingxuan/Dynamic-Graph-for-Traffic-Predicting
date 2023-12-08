@@ -31,6 +31,10 @@ class TrafficLoss(nn.Module):
         dist_loss = self.distance_matrix[target - 1, predicted_indices - 1]
         stat_loss = self.station_matrix[target - 1, predicted_indices - 1]
 
+        # Normalize or scale dist_loss and stat_loss
+        normalized_dist_loss = torch.mean(dist_loss) / torch.max(self.distance_matrix)
+        normalized_stat_loss = torch.mean(stat_loss) / torch.max(self.station_matrix)
+
         # Combine losses
-        total_loss = avg_ce_loss + self.lambda_dist * torch.mean(dist_loss) + self.lambda_stat * torch.mean(stat_loss)
+        total_loss = avg_ce_loss + self.lambda_dist * normalized_dist_loss + self.lambda_stat * normalized_stat_loss
         return total_loss

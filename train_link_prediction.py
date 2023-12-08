@@ -36,6 +36,7 @@ if __name__ == "__main__":
     # TODO 将预测上车/下车 & 车站信息加入参数中
     predict_get_on = False
     station_num = 392
+    multi_GPU_label = False
 
     # get data for training, validation and testing
     node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, new_node_val_data, new_node_test_data = \
@@ -138,6 +139,12 @@ if __name__ == "__main__":
 
         optimizer = create_optimizer(model=model, optimizer_name=args.optimizer, learning_rate=args.learning_rate, weight_decay=args.weight_decay)
 
+        if torch.cuda.device_count() > 1:
+            print("Use", torch.cuda.device_count(), "GPUs to train...")
+            # DataParallel 将模型复制到所有可用的 GPU
+            model = nn.DataParallel(model)
+            multi_GPU_label = True
+
         model = convert_to_gpu(model, device=args.device)
 
         save_model_folder = f"./saved_models/{args.model_name}/{args.dataset_name}/{args.save_model_name}/"
@@ -158,10 +165,16 @@ if __name__ == "__main__":
             model.train()
             if args.model_name in ['DyRep', 'TGAT', 'TGN', 'CAWN', 'TCL', 'GraphMixer', 'DyGFormer']:
                 # training, only use training graph
-                model[0].set_neighbor_sampler(train_neighbor_sampler)
+                if multi_GPU_label:
+                    model.module[0].set_neighbor_sampler(train_neighbor_sampler)
+                else:
+                    model[0].set_neighbor_sampler(train_neighbor_sampler)
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                 # reinitialize memory of memory-based models at the start of each epoch
-                model[0].memory_bank.__init_memory_bank__()
+                if multi_GPU_label:
+                    model.module[0].memory_bank.__init_memory_bank__()
+                else:
+                    model[0].memory_bank.__init_memory_bank__()
 
             # store train losses and metrics
             train_losses, train_metrics = [], []
@@ -181,13 +194,22 @@ if __name__ == "__main__":
                 to_predict_station_ids = np.array([], dtype=int)
                 if args.model_name in ['TGN']:
                     # 更新 memory 用，不做预测
-                    batch_src_node_embeddings, batch_dst_node_embeddings = \
-                        model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                          dst_node_ids=batch_dst_node_ids,
-                                                                          node_interact_times=batch_node_interact_times,
-                                                                          edge_ids=batch_edge_ids,
-                                                                          edges_are_positive=True,
-                                                                          num_neighbors=args.num_neighbors)
+                    if multi_GPU_label:
+                        batch_src_node_embeddings, batch_dst_node_embeddings = \
+                            model.module[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                                     dst_node_ids=batch_dst_node_ids,
+                                                                                     node_interact_times=batch_node_interact_times,
+                                                                                     edge_ids=batch_edge_ids,
+                                                                                     edges_are_positive=True,
+                                                                                     num_neighbors=args.num_neighbors)
+                    else:
+                        batch_src_node_embeddings, batch_dst_node_embeddings = \
+                            model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                              dst_node_ids=batch_dst_node_ids,
+                                                                              node_interact_times=batch_node_interact_times,
+                                                                              edge_ids=batch_edge_ids,
+                                                                              edges_are_positive=True,
+                                                                              num_neighbors=args.num_neighbors)
 
                     # 根据 get_on_off_labels 进行筛选，只保留 get_on 或 get_off 的数据，然后再生成 to_predict_source_ids，to_predict_interact_time，to_predict_station_ids
                     flitter_indices = np.where(get_on_off_labels == 1) if predict_get_on else np.where(get_on_off_labels == 0)
@@ -206,13 +228,22 @@ if __name__ == "__main__":
                         to_predict_station_ids = np.concatenate((to_predict_station_ids, all_predict_station_ids))
 
                     # 预测用，不更新 memory
-                    predict_src_embeddings, predict_dst_embeddings = \
-                        model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=to_predict_source_ids,
-                                                                          dst_node_ids=to_predict_station_ids,
-                                                                          node_interact_times=to_predict_interact_time,
-                                                                          edge_ids=None,
-                                                                          edges_are_positive=False,
-                                                                          num_neighbors=args.num_neighbors)
+                    if multi_GPU_label:
+                        predict_src_embeddings, predict_dst_embeddings = \
+                            model.module[0].compute_src_dst_node_temporal_embeddings(src_node_ids=to_predict_source_ids,
+                                                                                     dst_node_ids=to_predict_station_ids,
+                                                                                     node_interact_times=to_predict_interact_time,
+                                                                                     edge_ids=None,
+                                                                                     edges_are_positive=False,
+                                                                                     num_neighbors=args.num_neighbors)
+                    else:
+                        predict_src_embeddings, predict_dst_embeddings = \
+                            model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=to_predict_source_ids,
+                                                                              dst_node_ids=to_predict_station_ids,
+                                                                              node_interact_times=to_predict_interact_time,
+                                                                              edge_ids=None,
+                                                                              edges_are_positive=False,
+                                                                              num_neighbors=args.num_neighbors)
 
                 else:
                     raise ValueError(f"Wrong value for model_name {args.model_name}!")
@@ -300,14 +331,16 @@ if __name__ == "__main__":
 
                 # 本 batch 中所有的交互可能性
                 if flittered_batch_src_node_ids.size != 0:
-                    all_possibilities = model[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
+                    if multi_GPU_label:
+                        all_possibilities = model.module[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
+                    else:
+                        all_possibilities = model[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
 
                     # 将 all_possibilities 切片为二位张量，其中每行都有 station_num 个值，表示用户和所有车站的交互可能性
                     # 对所有的交互可能取最大值，表示本次预测的结果
                     user_possibilities = all_possibilities.view(-1, station_num)
                     predict_indices = torch.argmax(user_possibilities, dim=1)
-                    truth = convert_to_gpu(torch.from_numpy(batch_dst_node_ids), device=args.device)
-                    get_on_off_labels = convert_to_gpu(torch.from_numpy(get_on_off_labels), device=args.device)
+                    truth = convert_to_gpu(torch.from_numpy(flittered_batch_dst_node_ids), device=args.device)
 
                     loss = loss_func(pred=user_possibilities, target=truth)
 
@@ -323,11 +356,17 @@ if __name__ == "__main__":
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                     # detach the memories and raw messages of nodes in the memory bank after each batch, so we don't back propagate to the start of time
-                    model[0].memory_bank.detach_memory_bank()
+                    if multi_GPU_label:
+                        model.module[0].memory_bank.detach_memory_bank()
+                    else:
+                        model[0].memory_bank.detach_memory_bank()
 
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                 # backup memory bank after training so it can be used for new validation nodes
-                train_backup_memory_bank = model[0].memory_bank.backup_memory_bank()
+                if multi_GPU_label:
+                    train_backup_memory_bank = model.module[0].memory_bank.backup_memory_bank()
+                else:
+                    train_backup_memory_bank = model[0].memory_bank.backup_memory_bank()
 
             val_losses, val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                      model=model,
@@ -337,14 +376,21 @@ if __name__ == "__main__":
                                                                      evaluate_data=val_data,
                                                                      loss_func=loss_func,
                                                                      num_neighbors=args.num_neighbors,
-                                                                     time_gap=args.time_gap)
+                                                                     time_gap=args.time_gap,
+                                                                     multi_gpu=multi_GPU_label)
 
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                 # backup memory bank after validating so it can be used for testing nodes (since test edges are strictly later in time than validation edges)
-                val_backup_memory_bank = model[0].memory_bank.backup_memory_bank()
+                if multi_GPU_label:
+                    val_backup_memory_bank = model.module[0].memory_bank.backup_memory_bank()
+                else:
+                    val_backup_memory_bank = model[0].memory_bank.backup_memory_bank()
 
                 # reload training memory bank for new validation nodes
-                model[0].memory_bank.reload_memory_bank(train_backup_memory_bank)
+                if multi_GPU_label:
+                    model.module[0].memory_bank.reload_memory_bank(train_backup_memory_bank)
+                else:
+                    model[0].memory_bank.reload_memory_bank(train_backup_memory_bank)
 
             new_node_val_losses, new_node_val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                        model=model,
@@ -354,12 +400,16 @@ if __name__ == "__main__":
                                                                                        evaluate_data=new_node_val_data,
                                                                                        loss_func=loss_func,
                                                                                        num_neighbors=args.num_neighbors,
-                                                                                       time_gap=args.time_gap)
+                                                                                       time_gap=args.time_gap,
+                                                                                       multi_gpu=multi_GPU_label)
 
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                 # reload validation memory bank for testing nodes or saving models
                 # note that since model treats memory as parameters, we need to reload the memory to val_backup_memory_bank for saving models
-                model[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
+                if multi_GPU_label:
+                    model.module[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
+                else:
+                    model[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
 
             logger.info(f'Epoch: {epoch + 1}, learning rate: {optimizer.param_groups[0]["lr"]}, train loss: {np.mean(train_losses):.4f}')
             for metric_name in train_metrics[0].keys():
@@ -381,11 +431,15 @@ if __name__ == "__main__":
                                                                            evaluate_data=test_data,
                                                                            loss_func=loss_func,
                                                                            num_neighbors=args.num_neighbors,
-                                                                           time_gap=args.time_gap)
+                                                                           time_gap=args.time_gap,
+                                                                           multi_gpu=multi_GPU_label)
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                     # reload validation memory bank for new testing nodes
-                    model[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
+                    if multi_GPU_label:
+                        model.module[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
+                    else:
+                        model[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
 
                 new_node_test_losses, new_node_test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                              model=model,
@@ -395,12 +449,16 @@ if __name__ == "__main__":
                                                                                              evaluate_data=new_node_test_data,
                                                                                              loss_func=loss_func,
                                                                                              num_neighbors=args.num_neighbors,
-                                                                                             time_gap=args.time_gap)
+                                                                                             time_gap=args.time_gap,
+                                                                                             multi_gpu=multi_GPU_label)
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                     # reload validation memory bank for testing nodes or saving models
                     # note that since model treats memory as parameters, we need to reload the memory to val_backup_memory_bank for saving models
-                    model[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
+                    if multi_GPU_label:
+                        model.module[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
+                    else:
+                        model[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
 
                 logger.info(f'test loss: {np.mean(test_losses):.4f}')
                 for metric_name in test_metrics[0].keys():
@@ -434,7 +492,8 @@ if __name__ == "__main__":
                                                                      evaluate_data=val_data,
                                                                      loss_func=loss_func,
                                                                      num_neighbors=args.num_neighbors,
-                                                                     time_gap=args.time_gap)
+                                                                     time_gap=args.time_gap,
+                                                                     multi_gpu=multi_GPU_label)
 
             new_node_val_losses, new_node_val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                        model=model,
@@ -444,11 +503,15 @@ if __name__ == "__main__":
                                                                                        evaluate_data=new_node_val_data,
                                                                                        loss_func=loss_func,
                                                                                        num_neighbors=args.num_neighbors,
-                                                                                       time_gap=args.time_gap)
+                                                                                       time_gap=args.time_gap,
+                                                                                       multi_gpu=multi_GPU_label)
 
         if args.model_name in ['JODIE', 'DyRep', 'TGN']:
             # the memory in the best model has seen the validation edges, we need to backup the memory for new testing nodes
-            val_backup_memory_bank = model[0].memory_bank.backup_memory_bank()
+            if multi_GPU_label:
+                val_backup_memory_bank = model.module[0].memory_bank.backup_memory_bank()
+            else:
+                val_backup_memory_bank = model[0].memory_bank.backup_memory_bank()
 
         test_losses, test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                    model=model,
@@ -458,11 +521,15 @@ if __name__ == "__main__":
                                                                    evaluate_data=test_data,
                                                                    loss_func=loss_func,
                                                                    num_neighbors=args.num_neighbors,
-                                                                   time_gap=args.time_gap)
+                                                                   time_gap=args.time_gap,
+                                                                   multi_gpu=multi_GPU_label)
 
         if args.model_name in ['JODIE', 'DyRep', 'TGN']:
             # reload validation memory bank for new testing nodes
-            model[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
+            if multi_GPU_label:
+                model.module[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
+            else:
+                model[0].memory_bank.reload_memory_bank(val_backup_memory_bank)
 
         new_node_test_losses, new_node_test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                      model=model,
@@ -472,7 +539,8 @@ if __name__ == "__main__":
                                                                                      evaluate_data=new_node_test_data,
                                                                                      loss_func=loss_func,
                                                                                      num_neighbors=args.num_neighbors,
-                                                                                     time_gap=args.time_gap)
+                                                                                     time_gap=args.time_gap,
+                                                                                     multi_gpu=multi_GPU_label)
         # store the evaluation metrics at the current run
         val_metric_dict, new_node_val_metric_dict, test_metric_dict, new_node_test_metric_dict = {}, {}, {}, {}
 

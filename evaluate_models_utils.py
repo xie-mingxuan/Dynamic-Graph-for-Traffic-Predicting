@@ -18,7 +18,7 @@ from utils.DataLoader import Data
 
 def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_sampler: NeighborSampler, evaluate_idx_data_loader: DataLoader,
                                    evaluate_neg_edge_sampler: NegativeEdgeSampler, evaluate_data: Data, loss_func: nn.Module,
-                                   num_neighbors: int = 20, time_gap: int = 2000, predict_get_on: bool = False, args: argparse.Namespace = None):
+                                   num_neighbors: int = 20, time_gap: int = 2000, predict_get_on: bool = False, args: argparse.Namespace = None, multi_gpu: bool = False):
     """
     evaluate models on the link prediction task
     :param model_name: str, name of the model
@@ -31,6 +31,8 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
     :param num_neighbors: int, number of neighbors to sample for each node
     :param time_gap: int, time gap for neighbors to compute node features
     :param predict_get_on: if the job is to predict get on station
+    :param args: argparse.Namespace, configuration
+    :param multi_gpu: bool, if you use multi-GPU
     :return:
     """
     # Ensures the random sampler uses a fixed seed for evaluation (i.e. we always sample the same negatives for validation / test set)
@@ -39,7 +41,10 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
 
     if model_name in ['DyRep', 'TGAT', 'TGN', 'CAWN', 'TCL', 'GraphMixer', 'DyGFormer']:
         # evaluation phase use all the graph information
-        model[0].set_neighbor_sampler(neighbor_sampler)
+        if multi_gpu:
+            model.module[0].set_neighbor_sampler(neighbor_sampler)
+        else:
+            model[0].set_neighbor_sampler(neighbor_sampler)
 
     model.eval()
 
@@ -70,13 +75,21 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
             to_predict_station_ids = np.array([], dtype=int)
             if args.model_name in ['TGN']:
                 # 更新 memory 用，不做预测
-                batch_src_node_embeddings, batch_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                      dst_node_ids=batch_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times,
-                                                                      edge_ids=batch_edge_ids,
-                                                                      edges_are_positive=True,
-                                                                      num_neighbors=args.num_neighbors)
+                if multi_gpu:
+                    model.module[0].compute_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                dst_node_ids=batch_dst_node_ids,
+                                                                node_interact_times=batch_node_interact_times,
+                                                                edge_ids=batch_edge_ids,
+                                                                edges_are_positive=True,
+                                                                num_neighbors=args.num_neighbors)
+                else:
+                    batch_src_node_embeddings, batch_dst_node_embeddings = \
+                        model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                          dst_node_ids=batch_dst_node_ids,
+                                                                          node_interact_times=batch_node_interact_times,
+                                                                          edge_ids=batch_edge_ids,
+                                                                          edges_are_positive=True,
+                                                                          num_neighbors=args.num_neighbors)
 
                 # 根据 get_on_off_labels 进行筛选，只保留 get_on 或 get_off 的数据，然后再生成 to_predict_source_ids，to_predict_interact_time，to_predict_station_ids
                 flitter_indices = np.where(get_on_off_labels == 1) if predict_get_on else np.where(get_on_off_labels == 0)
@@ -95,13 +108,22 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                     to_predict_station_ids = np.concatenate((to_predict_station_ids, all_predict_station_ids))
 
                 # 预测用，不更新 memory
-                predict_src_embeddings, predict_dst_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=to_predict_source_ids,
-                                                                      dst_node_ids=to_predict_station_ids,
-                                                                      node_interact_times=to_predict_interact_time,
-                                                                      edge_ids=None,
-                                                                      edges_are_positive=False,
-                                                                      num_neighbors=args.num_neighbors)
+                if multi_gpu:
+                    predict_src_embeddings, predict_dst_embeddings = \
+                        model.module[0].compute_src_dst_node_temporal_embeddings(src_node_ids=to_predict_source_ids,
+                                                                                 dst_node_ids=to_predict_station_ids,
+                                                                                 node_interact_times=to_predict_interact_time,
+                                                                                 edge_ids=None,
+                                                                                 edges_are_positive=False,
+                                                                                 num_neighbors=args.num_neighbors)
+                else:
+                    predict_src_embeddings, predict_dst_embeddings = \
+                        model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=to_predict_source_ids,
+                                                                          dst_node_ids=to_predict_station_ids,
+                                                                          node_interact_times=to_predict_interact_time,
+                                                                          edge_ids=None,
+                                                                          edges_are_positive=False,
+                                                                          num_neighbors=args.num_neighbors)
             else:
                 raise ValueError(f"Wrong value for model_name {model_name}!")
 
@@ -187,14 +209,16 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
 
             if flittered_batch_src_node_ids.size != 0:
                 # 本 batch 中所有的交互可能性
-                all_possibilities = model[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
+                if multi_gpu:
+                    all_possibilities = model.module[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
+                else:
+                    all_possibilities = model[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
 
                 # 将 all_possibilities 切片为二位张量，其中每行都有 station_num 个值，表示用户和所有车站的交互可能性
                 # 对所有的交互可能取最大值，表示本次预测的结果
                 user_possibilities = all_possibilities.view(-1, station_num)
                 predict_indices = torch.argmax(user_possibilities, dim=1)
-                truth = convert_to_gpu(torch.from_numpy(batch_dst_node_ids), device=args.device)
-                get_on_off_labels = convert_to_gpu(torch.from_numpy(get_on_off_labels), device=args.device)
+                truth = convert_to_gpu(torch.from_numpy(flittered_batch_dst_node_ids), device=args.device)
 
                 loss = loss_func(pred=user_possibilities, target=truth)
 
