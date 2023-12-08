@@ -59,7 +59,7 @@ def floyd_warshall(matrix_path: str):
     # 初始化距离矩阵
     distance_matrix = np.copy(adjacency_matrix)
     # 初始化站点数矩阵
-    station_matrix = np.zeros_like(adjacency_matrix, dtype=int)
+    station_matrix = np.zeros_like(adjacency_matrix, dtype=float)
 
     # 填充站点数矩阵
     for i in range(num_vertices):

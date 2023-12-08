@@ -5,6 +5,8 @@ import os
 import numpy as np
 import warnings
 import json
+
+import torch
 import torch.nn as nn
 
 from models.TGAT import TGAT
@@ -13,6 +15,7 @@ from models.CAWN import CAWN
 from models.TCL import TCL
 from models.GraphMixer import GraphMixer
 from models.DyGFormer import DyGFormer
+from models.TrafficLoss import TrafficLoss
 from models.modules import MergeLayer
 from utils.utils import set_random_seed, convert_to_gpu, get_parameter_sizes
 from utils.utils import get_neighbor_sampler, NegativeEdgeSampler
@@ -27,6 +30,10 @@ if __name__ == "__main__":
 
     # get arguments
     args = get_link_prediction_args(is_evaluation=True)
+
+    # TODO 将预测上车/下车 & 车站信息加入参数中
+    predict_get_on = False
+    station_num = 392
 
     # get data for training, validation and testing
     node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, new_node_val_data, new_node_test_data = \
@@ -155,7 +162,9 @@ if __name__ == "__main__":
                         new_node_raw_messages.append((node_raw_message[0].to(args.device), node_raw_message[1]))
                     model[0].memory_bank.node_raw_messages[node_id] = new_node_raw_messages
 
-            loss_func = nn.BCELoss()
+            distance_matrix = torch.from_numpy(np.load("DG_data/station_distance.npy")).to(device=args.device)
+            station_matrix = torch.from_numpy(np.load("DG_data/station_count.npy")).to(device=args.device)
+            loss_func = TrafficLoss(method="railway", direction="get_on" if predict_get_on else "get_off", distance_matrix=distance_matrix, station_matrix=station_matrix)
 
             # evaluate the best model
             logger.info(f'get final performance on dataset {args.dataset_name}...')
@@ -194,7 +203,8 @@ if __name__ == "__main__":
                                                                        evaluate_data=test_data,
                                                                        loss_func=loss_func,
                                                                        num_neighbors=args.num_neighbors,
-                                                                       time_gap=args.time_gap)
+                                                                       time_gap=args.time_gap,
+                                                                       args=args)
 
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                 # reload validation memory bank for new testing nodes

@@ -10,15 +10,15 @@ import os
 import json
 
 from models.EdgeBank import edge_bank_link_prediction
-from utils.metrics import get_link_prediction_metrics, get_node_classification_metrics
-from utils.utils import set_random_seed
+from utils.metrics import get_link_prediction_metrics, get_node_classification_metrics, get_link_prediction_metrics_multiclass
+from utils.utils import set_random_seed, convert_to_gpu
 from utils.utils import NegativeEdgeSampler, NeighborSampler
 from utils.DataLoader import Data
 
 
 def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_sampler: NeighborSampler, evaluate_idx_data_loader: DataLoader,
                                    evaluate_neg_edge_sampler: NegativeEdgeSampler, evaluate_data: Data, loss_func: nn.Module,
-                                   num_neighbors: int = 20, time_gap: int = 2000, predict_get_on: bool = False):
+                                   num_neighbors: int = 20, time_gap: int = 2000, predict_get_on: bool = False, args: argparse.Namespace = None):
     """
     evaluate models on the link prediction task
     :param model_name: str, name of the model
@@ -63,98 +63,144 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                 _, batch_neg_dst_node_ids = evaluate_neg_edge_sampler.sample(size=len(batch_src_node_ids))
                 batch_neg_src_node_ids = batch_src_node_ids
 
-            # we need to compute for positive and negative edges respectively, because the new sampling strategy (for evaluation) allows the negative source nodes to be
-            # different from the source nodes, this is different from previous works that just replace destination nodes with negative destination nodes
-            if model_name in ['TGAT', 'CAWN', 'TCL']:
-                # get temporal embedding of source and destination nodes
-                # two Tensors, with shape (batch_size, node_feat_dim)
-                batch_src_node_embeddings, batch_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                      dst_node_ids=batch_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times,
-                                                                      num_neighbors=num_neighbors)
-
-                # get temporal embedding of negative source and negative destination nodes
-                # two Tensors, with shape (batch_size, node_feat_dim)
-                batch_neg_src_node_embeddings, batch_neg_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
-                                                                      dst_node_ids=batch_neg_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times,
-                                                                      num_neighbors=num_neighbors)
-            elif model_name in ['JODIE', 'DyRep', 'TGN']:
-                # note that negative nodes do not change the memories while the positive nodes change the memories,
-                # we need to first compute the embeddings of negative nodes for memory-based models
-                # get temporal embedding of negative source and negative destination nodes
-                # two Tensors, with shape (batch_size, node_feat_dim)
-                batch_neg_src_node_embeddings, batch_neg_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
-                                                                      dst_node_ids=batch_neg_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times,
-                                                                      edge_ids=None,
-                                                                      edges_are_positive=False,
-                                                                      num_neighbors=num_neighbors)
-
-                # get temporal embedding of source and destination nodes
-                # two Tensors, with shape (batch_size, node_feat_dim)
+            # 将这里改为对所有的车站进行循环，通过比较预测概率决定最终车站，然后计算loss
+            # 针对所有的 source_node_id，对每个 source_node_id 都对所有的车站信息进行一个预测，然后取概率最大的那个作为预测值
+            station_num = 392
+            all_predict_station_ids = np.array(list(range(1, station_num + 1)))
+            to_predict_station_ids = np.array([], dtype=int)
+            if args.model_name in ['TGN']:
+                # 更新 memory 用，不做预测
                 batch_src_node_embeddings, batch_dst_node_embeddings = \
                     model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
                                                                       dst_node_ids=batch_dst_node_ids,
                                                                       node_interact_times=batch_node_interact_times,
                                                                       edge_ids=batch_edge_ids,
                                                                       edges_are_positive=True,
-                                                                      num_neighbors=num_neighbors)
-            elif model_name in ['GraphMixer']:
-                # get temporal embedding of source and destination nodes
-                # two Tensors, with shape (batch_size, node_feat_dim)
-                batch_src_node_embeddings, batch_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                      dst_node_ids=batch_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times,
-                                                                      num_neighbors=num_neighbors,
-                                                                      time_gap=time_gap)
+                                                                      num_neighbors=args.num_neighbors)
 
-                # get temporal embedding of negative source and negative destination nodes
-                # two Tensors, with shape (batch_size, node_feat_dim)
-                batch_neg_src_node_embeddings, batch_neg_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
-                                                                      dst_node_ids=batch_neg_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times,
-                                                                      num_neighbors=num_neighbors,
-                                                                      time_gap=time_gap)
-            elif model_name in ['DyGFormer']:
-                # get temporal embedding of source and destination nodes
-                # two Tensors, with shape (batch_size, node_feat_dim)
-                batch_src_node_embeddings, batch_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                      dst_node_ids=batch_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times)
+                # 根据 get_on_off_labels 进行筛选，只保留 get_on 或 get_off 的数据，然后再生成 to_predict_source_ids，to_predict_interact_time，to_predict_station_ids
+                flitter_indices = np.where(get_on_off_labels == 1) if predict_get_on else np.where(get_on_off_labels == 0)
+                flittered_batch_src_node_ids = batch_src_node_ids[flitter_indices]
+                flittered_batch_dst_node_ids = batch_dst_node_ids[flitter_indices]
+                flittered_batch_node_interact_times = batch_node_interact_times[flitter_indices]
+                flittered_batch_edge_ids = batch_edge_ids[flitter_indices]
 
-                # get temporal embedding of negative source and negative destination nodes
-                # two Tensors, with shape (batch_size, node_feat_dim)
-                batch_neg_src_node_embeddings, batch_neg_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
-                                                                      dst_node_ids=batch_neg_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times)
+                # 复制用户 id 和交互时间，使得每个用户 id 和交互时间都重复 station_num 遍，如
+                # [1,2,3] -> [1,1,1,2,2,2,3,3,3]
+                to_predict_source_ids = np.repeat(flittered_batch_src_node_ids, station_num, axis=0)
+                to_predict_interact_time = np.repeat(flittered_batch_node_interact_times, station_num, axis=0)
+                # 复制目的车站，使得每个用户 id 都可以对应每一个车站
+                # [1,2,3] -> [1,2,3,1,2,3,1,2,3]
+                for i in range(flittered_batch_src_node_ids.size):
+                    to_predict_station_ids = np.concatenate((to_predict_station_ids, all_predict_station_ids))
+
+                # 预测用，不更新 memory
+                predict_src_embeddings, predict_dst_embeddings = \
+                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=to_predict_source_ids,
+                                                                      dst_node_ids=to_predict_station_ids,
+                                                                      node_interact_times=to_predict_interact_time,
+                                                                      edge_ids=None,
+                                                                      edges_are_positive=False,
+                                                                      num_neighbors=args.num_neighbors)
             else:
                 raise ValueError(f"Wrong value for model_name {model_name}!")
+
+            # # we need to compute for positive and negative edges respectively, because the new sampling strategy (for evaluation) allows the negative source nodes to be
+            # # different from the source nodes, this is different from previous works that just replace destination nodes with negative destination nodes
+            # if model_name in ['TGAT', 'CAWN', 'TCL']:
+            #     # get temporal embedding of source and destination nodes
+            #     # two Tensors, with shape (batch_size, node_feat_dim)
+            #     batch_src_node_embeddings, batch_dst_node_embeddings = \
+            #         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+            #                                                           dst_node_ids=batch_dst_node_ids,
+            #                                                           node_interact_times=batch_node_interact_times,
+            #                                                           num_neighbors=num_neighbors)
+            #
+            #     # get temporal embedding of negative source and negative destination nodes
+            #     # two Tensors, with shape (batch_size, node_feat_dim)
+            #     batch_neg_src_node_embeddings, batch_neg_dst_node_embeddings = \
+            #         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
+            #                                                           dst_node_ids=batch_neg_dst_node_ids,
+            #                                                           node_interact_times=batch_node_interact_times,
+            #                                                           num_neighbors=num_neighbors)
+            # elif model_name in ['JODIE', 'DyRep', 'TGN']:
+            #     # note that negative nodes do not change the memories while the positive nodes change the memories,
+            #     # we need to first compute the embeddings of negative nodes for memory-based models
+            #     # get temporal embedding of negative source and negative destination nodes
+            #     # two Tensors, with shape (batch_size, node_feat_dim)
+            #     batch_neg_src_node_embeddings, batch_neg_dst_node_embeddings = \
+            #         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
+            #                                                           dst_node_ids=batch_neg_dst_node_ids,
+            #                                                           node_interact_times=batch_node_interact_times,
+            #                                                           edge_ids=None,
+            #                                                           edges_are_positive=False,
+            #                                                           num_neighbors=num_neighbors)
+            #
+            #     # get temporal embedding of source and destination nodes
+            #     # two Tensors, with shape (batch_size, node_feat_dim)
+            #     batch_src_node_embeddings, batch_dst_node_embeddings = \
+            #         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+            #                                                           dst_node_ids=batch_dst_node_ids,
+            #                                                           node_interact_times=batch_node_interact_times,
+            #                                                           edge_ids=batch_edge_ids,
+            #                                                           edges_are_positive=True,
+            #                                                           num_neighbors=num_neighbors)
+            # elif model_name in ['GraphMixer']:
+            #     # get temporal embedding of source and destination nodes
+            #     # two Tensors, with shape (batch_size, node_feat_dim)
+            #     batch_src_node_embeddings, batch_dst_node_embeddings = \
+            #         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+            #                                                           dst_node_ids=batch_dst_node_ids,
+            #                                                           node_interact_times=batch_node_interact_times,
+            #                                                           num_neighbors=num_neighbors,
+            #                                                           time_gap=time_gap)
+            #
+            #     # get temporal embedding of negative source and negative destination nodes
+            #     # two Tensors, with shape (batch_size, node_feat_dim)
+            #     batch_neg_src_node_embeddings, batch_neg_dst_node_embeddings = \
+            #         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
+            #                                                           dst_node_ids=batch_neg_dst_node_ids,
+            #                                                           node_interact_times=batch_node_interact_times,
+            #                                                           num_neighbors=num_neighbors,
+            #                                                           time_gap=time_gap)
+            # elif model_name in ['DyGFormer']:
+            #     # get temporal embedding of source and destination nodes
+            #     # two Tensors, with shape (batch_size, node_feat_dim)
+            #     batch_src_node_embeddings, batch_dst_node_embeddings = \
+            #         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+            #                                                           dst_node_ids=batch_dst_node_ids,
+            #                                                           node_interact_times=batch_node_interact_times)
+            #
+            #     # get temporal embedding of negative source and negative destination nodes
+            #     # two Tensors, with shape (batch_size, node_feat_dim)
+            #     batch_neg_src_node_embeddings, batch_neg_dst_node_embeddings = \
+            #         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
+            #                                                           dst_node_ids=batch_neg_dst_node_ids,
+            #                                                           node_interact_times=batch_node_interact_times)
+            # else:
+            #     raise ValueError(f"Wrong value for model_name {model_name}!")
             # get positive and negative probabilities, shape (batch_size, )
-            positive_probabilities = model[1](input_1=batch_src_node_embeddings, input_2=batch_dst_node_embeddings).squeeze(dim=-1).sigmoid()
-            negative_probabilities = model[1](input_1=batch_neg_src_node_embeddings, input_2=batch_neg_dst_node_embeddings).squeeze(dim=-1).sigmoid()
+            # positive_probabilities = model[1](input_1=batch_src_node_embeddings, input_2=batch_dst_node_embeddings).squeeze(dim=-1).sigmoid()
+            # negative_probabilities = model[1](input_1=batch_neg_src_node_embeddings, input_2=batch_neg_dst_node_embeddings).squeeze(dim=-1).sigmoid()
+            #
+            # predicts = torch.cat([positive_probabilities, negative_probabilities], dim=0)
 
-            predicts = torch.cat([positive_probabilities, negative_probabilities], dim=0)
-            # 为实际存在的边添加标签 1
-            truth = torch.cat([torch.ones_like(positive_probabilities), torch.zeros_like(negative_probabilities)], dim=0)
-            # 记录正负样本的下车/上车车站
-            get_on_off_station_ids = torch.cat([batch_src_node_ids, batch_src_node_ids] if predict_get_on else [batch_dst_node_ids, batch_neg_dst_node_ids], dim=0)
-            # 为真实下车数据添加标签 1
-            # 由于 negative_source_id 和 source_id 是一样的，所以可以直接使用正样本的上下车标签作为负样本的上下车标签
-            label = torch.cat([torch.from_numpy(get_on_off_labels), torch.from_numpy(get_on_off_labels)], dim=0)
+            if flittered_batch_src_node_ids.size != 0:
+                # 本 batch 中所有的交互可能性
+                all_possibilities = model[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
 
-            loss = loss_func(input=predicts, target=truth, label=label)
+                # 将 all_possibilities 切片为二位张量，其中每行都有 station_num 个值，表示用户和所有车站的交互可能性
+                # 对所有的交互可能取最大值，表示本次预测的结果
+                user_possibilities = all_possibilities.view(-1, station_num)
+                predict_indices = torch.argmax(user_possibilities, dim=1)
+                truth = convert_to_gpu(torch.from_numpy(batch_dst_node_ids), device=args.device)
+                get_on_off_labels = convert_to_gpu(torch.from_numpy(get_on_off_labels), device=args.device)
 
-            evaluate_losses.append(loss.item())
+                loss = loss_func(pred=user_possibilities, target=truth)
 
-            evaluate_metrics.append(get_link_prediction_metrics(predicts=predicts, labels=truth))
+                evaluate_losses.append(loss.item())
+
+                evaluate_metrics.append(get_link_prediction_metrics_multiclass(predicts=predict_indices, labels=truth))
 
             evaluate_idx_data_loader_tqdm.set_description(f'evaluate for the {batch_idx + 1}-th batch, evaluate loss: {loss.item()}')
 

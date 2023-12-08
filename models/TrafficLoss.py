@@ -1,22 +1,36 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class TrafficLoss(nn.Module):
-    def __init__(self, method: str = 'railway', direction: str = 'get_off'):
+    def __init__(self, method: str = 'railway', direction: str = 'get_off', distance_matrix: Tensor = None, station_matrix: Tensor = None, lambda_dist: float = 1.0, lambda_stat: float = 1.0):
         super(TrafficLoss, self).__init__()
         self.direction = direction
         if method == 'railway':
-            self.distance_matrix = torch.tensor(np.load("../DG_data/station_distance.npy"))
-            self.station_matrix = torch.tensor(np.load("../DG_data/station_count.npy.npy"))
+            self.distance_matrix = distance_matrix
+            self.station_matrix = station_matrix
+        self.lambda_dist = lambda_dist
+        self.lambda_stat = lambda_stat
+        self.cross_entropy_loss = nn.CrossEntropyLoss(reduction='none')
 
-    def forward(self, pred, target, label):
-        pred = pred.long()
-        target = target.long()
+    def forward(self, pred, target):
+        # Standard cross entropy loss
+        # Since the target indices are 1-indexed, we subtract 1 from them
+        ce_loss = self.cross_entropy_loss(pred, target - 1)
 
-        # As the index of station starts from 1, but information of the station starts from 0, we need to minus 1
-        loss = torch.log(1 + self.distance_matrixp[pred - 1, target - 1] * self.station_matrix[pred - 1, target - 1])
-        if self.direction == 'get_off':
-            loss = loss[label == 1]
-        return torch.mean(loss)
+        # Average cross entropy loss over valid indices
+        avg_ce_loss = torch.mean(ce_loss)
+
+        # Predicted indices
+        predicted_indices = torch.argmax(pred, dim=1)
+
+        # Distance and station loss components
+        # Since the target indices are 1-indexed, we subtract 1 from them
+        dist_loss = self.distance_matrix[target - 1, predicted_indices - 1]
+        stat_loss = self.station_matrix[target - 1, predicted_indices - 1]
+
+        # Combine losses
+        total_loss = avg_ce_loss + self.lambda_dist * torch.mean(dist_loss) + self.lambda_stat * torch.mean(stat_loss)
+        return total_loss
