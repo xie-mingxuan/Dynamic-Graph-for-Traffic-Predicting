@@ -73,15 +73,15 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
             station_num = 392
             all_predict_station_ids = np.array(list(range(1, station_num + 1)))
             to_predict_station_ids = np.array([], dtype=int)
-            if args.model_name in ['TGN']:
+            if model_name in ['TGN']:
                 # 更新 memory 用，不做预测
                 if multi_gpu:
-                    model.module[0].compute_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                dst_node_ids=batch_dst_node_ids,
-                                                                node_interact_times=batch_node_interact_times,
-                                                                edge_ids=batch_edge_ids,
-                                                                edges_are_positive=True,
-                                                                num_neighbors=args.num_neighbors)
+                    model.module[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                             dst_node_ids=batch_dst_node_ids,
+                                                                             node_interact_times=batch_node_interact_times,
+                                                                             edge_ids=batch_edge_ids,
+                                                                             edges_are_positive=True,
+                                                                             num_neighbors=num_neighbors)
                 else:
                     batch_src_node_embeddings, batch_dst_node_embeddings = \
                         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
@@ -89,7 +89,7 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                                                                           node_interact_times=batch_node_interact_times,
                                                                           edge_ids=batch_edge_ids,
                                                                           edges_are_positive=True,
-                                                                          num_neighbors=args.num_neighbors)
+                                                                          num_neighbors=num_neighbors)
 
                 # 根据 get_on_off_labels 进行筛选，只保留 get_on 或 get_off 的数据，然后再生成 to_predict_source_ids，to_predict_interact_time，to_predict_station_ids
                 flitter_indices = np.where(get_on_off_labels == 1) if predict_get_on else np.where(get_on_off_labels == 0)
@@ -115,7 +115,7 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                                                                                  node_interact_times=to_predict_interact_time,
                                                                                  edge_ids=None,
                                                                                  edges_are_positive=False,
-                                                                                 num_neighbors=args.num_neighbors)
+                                                                                 num_neighbors=num_neighbors)
                 else:
                     predict_src_embeddings, predict_dst_embeddings = \
                         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=to_predict_source_ids,
@@ -123,7 +123,7 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                                                                           node_interact_times=to_predict_interact_time,
                                                                           edge_ids=None,
                                                                           edges_are_positive=False,
-                                                                          num_neighbors=args.num_neighbors)
+                                                                          num_neighbors=num_neighbors)
             else:
                 raise ValueError(f"Wrong value for model_name {model_name}!")
 
@@ -218,7 +218,8 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                 # 对所有的交互可能取最大值，表示本次预测的结果
                 user_possibilities = all_possibilities.view(-1, station_num)
                 predict_indices = torch.argmax(user_possibilities, dim=1)
-                truth = convert_to_gpu(torch.from_numpy(flittered_batch_dst_node_ids), device=args.device)
+                # 这里将 truth 的标签也视作从 0 开始，在损失函数和评价函数中无需继续改变
+                truth = convert_to_gpu(torch.from_numpy(flittered_batch_dst_node_ids), device=args.device) - 1
 
                 loss = loss_func(pred=user_possibilities, target=truth)
 

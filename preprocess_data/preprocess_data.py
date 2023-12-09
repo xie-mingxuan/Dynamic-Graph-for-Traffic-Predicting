@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -90,13 +92,13 @@ def preprocess_data(dataset_name: str, bipartite: bool = True, node_feat_dim: in
     :param node_feat_dim: int, dimension of node features
     :return:
     """
-    Path("../processed_data/{}/".format(dataset_name)).mkdir(parents = True, exist_ok = True)
+    Path("../processed_data/{}/".format(dataset_name)).mkdir(parents=True, exist_ok=True)
     PATH = '../DG_data/{}/{}.csv'.format(dataset_name, dataset_name)
     OUT_DF = '../processed_data/{}/ml_{}.csv'.format(dataset_name, dataset_name)
     OUT_FEAT = '../processed_data/{}/ml_{}.npy'.format(dataset_name, dataset_name)
     OUT_NODE_FEAT = '../processed_data/{}/ml_{}_node.npy'.format(dataset_name, dataset_name)
 
-    if dataset_name == 't000':
+    if re.match(r'^t\d{3}$', dataset_name):
         df, edge_feats = format_csv(PATH)
     else:
         df, edge_feats = preprocess(PATH)
@@ -156,27 +158,27 @@ def check_data(dataset_name: str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Interface for preprocessing datasets')
-    parser.add_argument('--dataset_name', type = str,
-                        choices = ['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci',
-                                   'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts', 't000'],
-                        help = 'Dataset name', default = 't000')
-    parser.add_argument('--node_feat_dim', type = int, default = 172, help = 'Number of node raw features')
+    parser.add_argument('--dataset_name', type=str,
+                        choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci',
+                                 'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts', 't000', 't059'],
+                        help='Dataset name', default='t059')
+    parser.add_argument('--node_feat_dim', type=int, default=172, help='Number of node raw features')
 
     args = parser.parse_args()
 
     print(f'preprocess dataset {args.dataset_name}...')
     if args.dataset_name in ['enron', 'SocialEvo', 'uci']:
-        Path("../processed_data/{}/".format(args.dataset_name)).mkdir(parents = True, exist_ok = True)
+        Path("../processed_data/{}/".format(args.dataset_name)).mkdir(parents=True, exist_ok=True)
         copy_tree("../DG_data/{}/".format(args.dataset_name), "../processed_data/{}/".format(args.dataset_name))
         print(f'the original dataset of {args.dataset_name} is unavailable, directly use the processed dataset by previous works.')
     else:
         # bipartite dataset
-        if args.dataset_name in ['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 't000']:
-            preprocess_data(dataset_name = args.dataset_name, bipartite = True, node_feat_dim = args.node_feat_dim)
+        if args.dataset_name in ['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket'] or re.match(r'^t\d{3}$', args.dataset_name):
+            preprocess_data(dataset_name=args.dataset_name, bipartite=True, node_feat_dim=args.node_feat_dim)
         else:
-            preprocess_data(dataset_name = args.dataset_name, bipartite = False, node_feat_dim = args.node_feat_dim)
+            preprocess_data(dataset_name=args.dataset_name, bipartite=False, node_feat_dim=args.node_feat_dim)
         print(f'{args.dataset_name} is processed successfully.')
 
-        if args.dataset_name not in ['myket']:
+        if args.dataset_name not in ['myket'] and not re.match(r'^t\d{3}$', args.dataset_name):
             check_data(args.dataset_name)
         print(f'{args.dataset_name} passes the checks successfully.')

@@ -5,7 +5,7 @@ from torch import Tensor
 
 
 class TrafficLoss(nn.Module):
-    def __init__(self, method: str = 'railway', direction: str = 'get_off', distance_matrix: Tensor = None, station_matrix: Tensor = None, lambda_dist: float = 1.0, lambda_stat: float = 1.0):
+    def __init__(self, method: str = 'railway', direction: str = 'get_off', distance_matrix: Tensor = None, station_matrix: Tensor = None, lambda_dist: float = 10.0, lambda_stat: float = 10.0):
         super(TrafficLoss, self).__init__()
         self.direction = direction
         if method == 'railway':
@@ -17,8 +17,7 @@ class TrafficLoss(nn.Module):
 
     def forward(self, pred, target):
         # Standard cross entropy loss
-        # Since the target indices are 1-indexed, we subtract 1 from them
-        ce_loss = self.cross_entropy_loss(pred, target - 1)
+        ce_loss = self.cross_entropy_loss(pred, target)
 
         # Average cross entropy loss over valid indices
         avg_ce_loss = torch.mean(ce_loss)
@@ -27,9 +26,8 @@ class TrafficLoss(nn.Module):
         predicted_indices = torch.argmax(pred, dim=1)
 
         # Distance and station loss components
-        # Since the target indices are 1-indexed, we subtract 1 from them
-        dist_loss = self.distance_matrix[target - 1, predicted_indices - 1]
-        stat_loss = self.station_matrix[target - 1, predicted_indices - 1]
+        dist_loss = self.distance_matrix[target, predicted_indices]
+        stat_loss = self.station_matrix[target, predicted_indices]
 
         # Normalize or scale dist_loss and stat_loss
         normalized_dist_loss = torch.mean(dist_loss) / torch.max(self.distance_matrix)

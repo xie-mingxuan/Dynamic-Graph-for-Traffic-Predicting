@@ -330,6 +330,7 @@ if __name__ == "__main__":
                 # predicts = torch.cat([positive_probabilities, negative_probabilities], dim=0)
 
                 # 本 batch 中所有的交互可能性
+                # 注意，all_possibilities 的 shape 为 (batch_size * station_num, )，因此其 all_possibilities[user_id][0] 表示用户 user_id 对车站 1 的交互可能性
                 if flittered_batch_src_node_ids.size != 0:
                     if multi_GPU_label:
                         all_possibilities = model.module[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
@@ -340,7 +341,8 @@ if __name__ == "__main__":
                     # 对所有的交互可能取最大值，表示本次预测的结果
                     user_possibilities = all_possibilities.view(-1, station_num)
                     predict_indices = torch.argmax(user_possibilities, dim=1)
-                    truth = convert_to_gpu(torch.from_numpy(flittered_batch_dst_node_ids), device=args.device)
+                    # 这里将 truth 的标签也视作从 0 开始，在损失函数和评价函数中无需继续改变
+                    truth = convert_to_gpu(torch.from_numpy(flittered_batch_dst_node_ids), device=args.device) - 1
 
                     loss = loss_func(pred=user_possibilities, target=truth)
 
@@ -377,6 +379,7 @@ if __name__ == "__main__":
                                                                      loss_func=loss_func,
                                                                      num_neighbors=args.num_neighbors,
                                                                      time_gap=args.time_gap,
+                                                                     args=args,
                                                                      multi_gpu=multi_GPU_label)
 
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
@@ -401,6 +404,7 @@ if __name__ == "__main__":
                                                                                        loss_func=loss_func,
                                                                                        num_neighbors=args.num_neighbors,
                                                                                        time_gap=args.time_gap,
+                                                                                       args=args,
                                                                                        multi_gpu=multi_GPU_label)
 
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
@@ -432,6 +436,7 @@ if __name__ == "__main__":
                                                                            loss_func=loss_func,
                                                                            num_neighbors=args.num_neighbors,
                                                                            time_gap=args.time_gap,
+                                                                           args=args,
                                                                            multi_gpu=multi_GPU_label)
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
@@ -450,6 +455,7 @@ if __name__ == "__main__":
                                                                                              loss_func=loss_func,
                                                                                              num_neighbors=args.num_neighbors,
                                                                                              time_gap=args.time_gap,
+                                                                                             args=args,
                                                                                              multi_gpu=multi_GPU_label)
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
@@ -471,13 +477,13 @@ if __name__ == "__main__":
             val_metric_indicator = []
             for metric_name in val_metrics[0].keys():
                 val_metric_indicator.append((metric_name, np.mean([val_metric[metric_name] for val_metric in val_metrics]), True))
-            early_stop = early_stopping.step(val_metric_indicator, model)
+            early_stop = early_stopping.step(val_metric_indicator, model, multi_gpu_label=multi_GPU_label)
 
             if early_stop:
                 break
 
         # load the best model
-        early_stopping.load_checkpoint(model)
+        early_stopping.load_checkpoint(model, multi_gpu_label=multi_GPU_label)
 
         # evaluate the best model
         logger.info(f'get final performance on dataset {args.dataset_name}...')
@@ -493,6 +499,7 @@ if __name__ == "__main__":
                                                                      loss_func=loss_func,
                                                                      num_neighbors=args.num_neighbors,
                                                                      time_gap=args.time_gap,
+                                                                     args=args,
                                                                      multi_gpu=multi_GPU_label)
 
             new_node_val_losses, new_node_val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
@@ -504,6 +511,7 @@ if __name__ == "__main__":
                                                                                        loss_func=loss_func,
                                                                                        num_neighbors=args.num_neighbors,
                                                                                        time_gap=args.time_gap,
+                                                                                       args=args,
                                                                                        multi_gpu=multi_GPU_label)
 
         if args.model_name in ['JODIE', 'DyRep', 'TGN']:
@@ -522,6 +530,7 @@ if __name__ == "__main__":
                                                                    loss_func=loss_func,
                                                                    num_neighbors=args.num_neighbors,
                                                                    time_gap=args.time_gap,
+                                                                   args=args,
                                                                    multi_gpu=multi_GPU_label)
 
         if args.model_name in ['JODIE', 'DyRep', 'TGN']:
@@ -540,6 +549,7 @@ if __name__ == "__main__":
                                                                                      loss_func=loss_func,
                                                                                      num_neighbors=args.num_neighbors,
                                                                                      time_gap=args.time_gap,
+                                                                                     args=args,
                                                                                      multi_gpu=multi_GPU_label)
         # store the evaluation metrics at the current run
         val_metric_dict, new_node_val_metric_dict, test_metric_dict, new_node_test_metric_dict = {}, {}, {}, {}
