@@ -5,7 +5,7 @@ from torch import Tensor
 
 
 class TrafficLoss(nn.Module):
-    def __init__(self, method: str = 'railway', direction: str = 'get_off', distance_matrix: Tensor = None, station_matrix: Tensor = None, lambda_dist: float = 10.0, lambda_stat: float = 10.0):
+    def __init__(self, method: str = 'railway', direction: str = 'get_off', distance_matrix: Tensor = None, station_matrix: Tensor = None, lambda_dist: float = 1.0, lambda_stat: float = 1.0):
         super(TrafficLoss, self).__init__()
         self.direction = direction
         if method == 'railway':
@@ -26,8 +26,8 @@ class TrafficLoss(nn.Module):
         predicted_indices = torch.argmax(pred, dim=1)
 
         # Distance and station loss components
-        dist_loss = self.distance_matrix[target, predicted_indices]
-        stat_loss = self.station_matrix[target, predicted_indices]
+        dist_loss = self.distance_matrix[predicted_indices, target]
+        stat_loss = self.station_matrix[predicted_indices, target]
 
         # Normalize or scale dist_loss and stat_loss
         normalized_dist_loss = torch.mean(dist_loss) / torch.max(self.distance_matrix)
@@ -35,4 +35,4 @@ class TrafficLoss(nn.Module):
 
         # Combine losses
         total_loss = avg_ce_loss + self.lambda_dist * normalized_dist_loss + self.lambda_stat * normalized_stat_loss
-        return total_loss
+        return avg_ce_loss

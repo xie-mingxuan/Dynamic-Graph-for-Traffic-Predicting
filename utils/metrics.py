@@ -47,7 +47,7 @@ def get_link_prediction_metrics_multiclass(predicts: torch.Tensor, labels: torch
     # Convert tensors to numpy arrays
     predicts = predicts.cpu().detach().numpy()
     # Since the target indices are 1-indexed, we subtract 1 from them
-    labels = labels.cpu().numpy() - 1
+    labels = labels.cpu().numpy()
 
     # Calculate metrics
     accuracy = accuracy_score(labels, predicts)

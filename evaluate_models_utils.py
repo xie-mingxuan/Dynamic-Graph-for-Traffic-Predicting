@@ -92,11 +92,10 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                                                                           num_neighbors=num_neighbors)
 
                 # 根据 get_on_off_labels 进行筛选，只保留 get_on 或 get_off 的数据，然后再生成 to_predict_source_ids，to_predict_interact_time，to_predict_station_ids
-                flitter_indices = np.where(get_on_off_labels == 1) if predict_get_on else np.where(get_on_off_labels == 0)
+                flitter_indices = np.where(get_on_off_labels == 1) if not predict_get_on else np.where(get_on_off_labels == 0)
                 flittered_batch_src_node_ids = batch_src_node_ids[flitter_indices]
                 flittered_batch_dst_node_ids = batch_dst_node_ids[flitter_indices]
                 flittered_batch_node_interact_times = batch_node_interact_times[flitter_indices]
-                flittered_batch_edge_ids = batch_edge_ids[flitter_indices]
 
                 # 复制用户 id 和交互时间，使得每个用户 id 和交互时间都重复 station_num 遍，如
                 # [1,2,3] -> [1,1,1,2,2,2,3,3,3]
@@ -227,7 +226,7 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
 
                 evaluate_metrics.append(get_link_prediction_metrics_multiclass(predicts=predict_indices, labels=truth))
 
-            evaluate_idx_data_loader_tqdm.set_description(f'evaluate for the {batch_idx + 1}-th batch, evaluate loss: {loss.item()}')
+                evaluate_idx_data_loader_tqdm.set_description(f'evaluate for the {batch_idx + 1}-th batch, evaluate loss: {loss.item()}')
 
     return evaluate_losses, evaluate_metrics
 

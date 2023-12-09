@@ -56,7 +56,7 @@ def preprocess(dataset_name: str):
                          'idx': idx_list}), np.array(feat_l)
 
 
-def reindex(df: pd.DataFrame, bipartite: bool = True):
+def reindex(df: pd.DataFrame, bipartite: bool = True, is_traffic: bool = False):
     """
     reindex the ids of nodes and edges
     :param df: DataFrame
@@ -72,6 +72,8 @@ def reindex(df: pd.DataFrame, bipartite: bool = True):
 
         # if bipartite, discriminate the source and target node by unique ids (target node id is counted based on source node id)
         upper_station = df.i.max() + 1
+        if is_traffic:
+            upper_station = 392
         new_u = df.u + upper_station
 
         new_df.u = new_u
@@ -100,9 +102,10 @@ def preprocess_data(dataset_name: str, bipartite: bool = True, node_feat_dim: in
 
     if re.match(r'^t\d{3}$', dataset_name):
         df, edge_feats = format_csv(PATH)
+        new_df = reindex(df, bipartite, is_traffic=True)
     else:
         df, edge_feats = preprocess(PATH)
-    new_df = reindex(df, bipartite)
+        new_df = reindex(df, bipartite)
 
     # edge feature for zero index, which is not used (since edge id starts from 1)
     empty = np.zeros(edge_feats.shape[1])[np.newaxis, :]

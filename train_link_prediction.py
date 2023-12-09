@@ -212,11 +212,10 @@ if __name__ == "__main__":
                                                                               num_neighbors=args.num_neighbors)
 
                     # 根据 get_on_off_labels 进行筛选，只保留 get_on 或 get_off 的数据，然后再生成 to_predict_source_ids，to_predict_interact_time，to_predict_station_ids
-                    flitter_indices = np.where(get_on_off_labels == 1) if predict_get_on else np.where(get_on_off_labels == 0)
+                    flitter_indices = np.where(get_on_off_labels == 1) if not predict_get_on else np.where(get_on_off_labels == 0)
                     flittered_batch_src_node_ids = batch_src_node_ids[flitter_indices]
                     flittered_batch_dst_node_ids = batch_dst_node_ids[flitter_indices]
                     flittered_batch_node_interact_times = batch_node_interact_times[flitter_indices]
-                    flittered_batch_edge_ids = batch_edge_ids[flitter_indices]
 
                     # 复制用户 id 和交互时间，使得每个用户 id 和交互时间都重复 station_num 遍，如
                     # [1,2,3] -> [1,1,1,2,2,2,3,3,3]
@@ -354,7 +353,7 @@ if __name__ == "__main__":
                     loss.backward()
                     optimizer.step()
 
-                train_idx_data_loader_tqdm.set_description(f'Epoch: {epoch + 1}, train for the {batch_idx + 1}-th batch, train loss: {loss.item()}')
+                    train_idx_data_loader_tqdm.set_description(f'Epoch: {epoch + 1}, train for the {batch_idx + 1}-th batch, train loss: {loss.item()}')
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                     # detach the memories and raw messages of nodes in the memory bank after each batch, so we don't back propagate to the start of time
