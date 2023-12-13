@@ -55,14 +55,14 @@ def format_csv(path: str, trans: str = "railway"):
         time_list.append(get_on_time)
         label_list.append(0)
         index_list.append(real_index * 2)
-        feature_list.append([0.0 for _ in range(172)])
+        feature_list.append([0.0 for _ in range(392)])
 
         user_id_list.append(user_id_map[user])
         station_id_list.append(station_id_map[get_off_station])
         time_list.append(get_off_time)
         label_list.append(1)
         index_list.append(real_index * 2 + 1)
-        feature_list.append([0.0 for _ in range(172)])
+        feature_list.append([1.0 for _ in range(392)])
 
         real_index += 1
 

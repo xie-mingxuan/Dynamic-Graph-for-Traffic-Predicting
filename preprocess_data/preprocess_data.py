@@ -165,7 +165,7 @@ if __name__ == '__main__':
                         choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci',
                                  'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts', 't000', 't059'],
                         help='Dataset name', default='t059')
-    parser.add_argument('--node_feat_dim', type=int, default=172, help='Number of node raw features')
+    parser.add_argument('--node_feat_dim', type=int, default=392, help='Number of node raw features')
 
     args = parser.parse_args()
 

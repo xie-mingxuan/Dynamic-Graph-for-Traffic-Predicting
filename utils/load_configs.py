@@ -28,7 +28,7 @@ def get_link_prediction_args(is_evaluation: bool = False):
     parser.add_argument('--walk_length', type=int, default=1, help='length of each random walk')
     parser.add_argument('--time_gap', type=int, default=2000, help='time gap for neighbors to compute node features')
     parser.add_argument('--time_feat_dim', type=int, default=100, help='dimension of the time embedding')
-    parser.add_argument('--position_feat_dim', type=int, default=172, help='dimension of the position embedding')
+    parser.add_argument('--position_feat_dim', type=int, default=392, help='dimension of the position embedding')
     parser.add_argument('--edge_bank_memory_mode', type=str, default='unlimited_memory', help='how memory of EdgeBank works',
                         choices=['unlimited_memory', 'time_window_memory', 'repeat_threshold_memory'])
     parser.add_argument('--time_window_mode', type=str, default='fixed_proportion', help='how to select the time window size for time window memory',
