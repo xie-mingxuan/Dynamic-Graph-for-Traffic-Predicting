@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class PredictionDecoder(torch.nn.Module):
-    def __init__(self, dim_field, n_user: int = 60082, n_station: int = 14695, use_history=True, reflect_data=None,
+    def __init__(self, dim_field, n_user: int = 60082, n_station: int = 392, use_history=True, reflect_data=None,
                  type_all=None, dropout: float = 0.1):
         super().__init__()
         self.user_embedding = nn.Embedding(n_station, dim_field)
@@ -24,26 +24,11 @@ class PredictionDecoder(torch.nn.Module):
             nn.LeakyReLU(),
             nn.Linear(dim_field // 2, dim_field),
         )
-        if self.use_hierarchy:
-            self.gamma = nn.Parameter(torch.rand(n_user, 1), requires_grad=True)
-            self.mlp = nn.ModuleDict(
-                {t: nn.Sequential(
-                    nn.Linear(dim_field, dim_field // 2),
-                    nn.LeakyReLU(),
-                    nn.Linear(dim_field // 2, dim_field),
-                ) for t in self.type}
-            )
-
-            self.fc_field_1 = nn.Linear(
-                (len(self.type) - 1), 1)
-
-        else:
-
-            self.mlp = nn.Sequential(
-                nn.Linear(dim_field, dim_field // 2),
-                nn.LeakyReLU(),
-                nn.Linear(dim_field // 2, dim_field),
-            )
+        self.mlp = nn.Sequential(
+            nn.Linear(dim_field, dim_field // 2),
+            nn.LeakyReLU(),
+            nn.Linear(dim_field // 2, dim_field),
+        )
         self.use_his = use_history
 
     def forward(self, user_embedding, station_embedding, nodes, user_id, raw_field_embed):

@@ -150,15 +150,15 @@ class MemoryModel(torch.nn.Module):
                                                                                                 dst_node_embeddings=dst_node_embeddings,
                                                                                                 node_interact_times=node_interact_times,
                                                                                                 edge_ids=edge_ids)
-            unique_dst_node_ids, new_dst_node_raw_messages = self.compute_new_node_raw_messages(src_node_ids=dst_node_ids,
-                                                                                                dst_node_ids=src_node_ids,
-                                                                                                dst_node_embeddings=src_node_embeddings,
-                                                                                                node_interact_times=node_interact_times,
-                                                                                                edge_ids=edge_ids)
+            # unique_dst_node_ids, new_dst_node_raw_messages = self.compute_new_node_raw_messages(src_node_ids=dst_node_ids,
+            #                                                                                     dst_node_ids=src_node_ids,
+            #                                                                                     dst_node_embeddings=src_node_embeddings,
+            #                                                                                     node_interact_times=node_interact_times,
+            #                                                                                     edge_ids=edge_ids)
 
             # store new raw messages for source and destination nodes
             self.memory_bank.store_node_raw_messages(node_ids=unique_src_node_ids, new_node_raw_messages=new_src_node_raw_messages)
-            self.memory_bank.store_node_raw_messages(node_ids=unique_dst_node_ids, new_node_raw_messages=new_dst_node_raw_messages)
+            # self.memory_bank.store_node_raw_messages(node_ids=unique_dst_node_ids, new_node_raw_messages=new_dst_node_raw_messages)
 
         # DyRep does not use embedding module, which instead uses updated_node_memories based on previous raw messages and historical memories
         if self.model_name == 'DyRep':
