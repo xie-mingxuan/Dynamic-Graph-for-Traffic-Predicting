@@ -11,12 +11,12 @@ def get_link_prediction_args(is_evaluation: bool = False):
     """
     # arguments
     parser = argparse.ArgumentParser('Interface for the link prediction task')
-    parser.add_argument('--dataset_name', type=str, help='dataset to be used', default='t059',
-                        choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci', 'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts', 't000', 't059'])
-    parser.add_argument('--batch_size', type=int, default=8, help='batch size')
+    parser.add_argument('--dataset_name', type=str, help='dataset to be used', default='t000',
+                        choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci', 'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts', 't000', 't059', 't483'])
+    parser.add_argument('--batch_size', type=int, default=64, help='batch size')
     parser.add_argument('--model_name', type=str, default='TGN', help='name of the model, note that EdgeBank is only applicable for evaluation',
                         choices=['JODIE', 'DyRep', 'TGAT', 'TGN', 'CAWN', 'EdgeBank', 'TCL', 'GraphMixer', 'DyGFormer'])
-    parser.add_argument('--gpu', type=int, default=1, help='number of gpu to use')
+    parser.add_argument('--gpu', type=int, default=2, help='number of gpu to use')
     parser.add_argument('--num_neighbors', type=int, default=20, help='number of neighbors to sample for each node')
     parser.add_argument('--sample_neighbor_strategy', type=str, default='recent', choices=['uniform', 'recent', 'time_interval_aware'], help='how to sample historical neighbors')
     parser.add_argument('--time_scaling_factor', default=1e-6, type=float, help='the hyperparameter that controls the sampling preference with time interval, '
@@ -24,7 +24,7 @@ def get_link_prediction_args(is_evaluation: bool = False):
                         'it works when sample_neighbor_strategy == time_interval_aware')
     parser.add_argument('--num_walk_heads', type=int, default=8, help='number of heads used for the attention in walk encoder')
     parser.add_argument('--num_heads', type=int, default=2, help='number of heads used in attention layer')
-    parser.add_argument('--num_layers', type=int, default=2, help='number of model layers')
+    parser.add_argument('--num_layers', type=int, default=1, help='number of model layers')
     parser.add_argument('--walk_length', type=int, default=1, help='length of each random walk')
     parser.add_argument('--time_gap', type=int, default=2000, help='time gap for neighbors to compute node features')
     parser.add_argument('--time_feat_dim', type=int, default=100, help='dimension of the time embedding')

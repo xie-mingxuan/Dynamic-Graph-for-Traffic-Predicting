@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
+from record_statistics import get_person_record_ge
+
 
 def format_csv(path: str, trans: str = "railway"):
     """
@@ -10,6 +12,8 @@ def format_csv(path: str, trans: str = "railway"):
     :param path: path of the dataset
     :return: a format dataset
     """
+
+    useful_user_id = get_person_record_ge(path, record_num=10)
 
     with open(path, 'r', encoding="utf-8", errors="ignore") as f:
         user_data = pd.read_csv(f, header=None, dtype=str)
@@ -32,6 +36,9 @@ def format_csv(path: str, trans: str = "railway"):
             continue
 
         user = row[1]
+        if user not in useful_user_id:
+            continue
+
         get_on_time = int(datetime.strptime(row[4], '%Y/%m/%d %H:%M:%S').timestamp())
         get_on_station = row[5]
         get_off_time = int(datetime.strptime(row[9], '%Y/%m/%d %H:%M:%S').timestamp())
@@ -49,20 +56,25 @@ def format_csv(path: str, trans: str = "railway"):
             station_id_map[get_off_station] = unique_station_id_index
             unique_station_id_index += 1
 
+        if get_on_time > get_off_time:
+            temp = get_off_time
+            get_off_time = get_on_time
+            get_on_time = temp
+
         # mark get_on data as label 0, get_off data as label 1
         user_id_list.append(user_id_map[user])
         station_id_list.append(station_id_map[get_on_station])
         time_list.append(get_on_time)
         label_list.append(0)
         index_list.append(real_index * 2)
-        feature_list.append([0.0 for _ in range(16)])
+        feature_list.append([0.0 for _ in range(8)])
 
         user_id_list.append(user_id_map[user])
         station_id_list.append(station_id_map[get_off_station])
         time_list.append(get_off_time)
         label_list.append(1)
         index_list.append(real_index * 2 + 1)
-        feature_list.append([1.0 for _ in range(16)])
+        feature_list.append([1.0 for _ in range(8)])
 
         real_index += 1
 
@@ -72,6 +84,7 @@ def format_csv(path: str, trans: str = "railway"):
                        'label': label_list,
                        'idx': index_list})
     df = df.sort_values(by="ts", ascending=True)
+    df["ts"] = df["ts"] - df["ts"].min()
 
     return df, np.array(feature_list)
 

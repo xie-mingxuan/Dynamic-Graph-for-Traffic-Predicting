@@ -1,6 +1,4 @@
-import numpy as np
 import pandas as pd
-from datetime import datetime
 
 
 def statistic_record(path: str, trans: str = "railway"):
@@ -32,5 +30,29 @@ def statistic_record(path: str, trans: str = "railway"):
     print(f"total_count = {count_total}")
 
 
+def get_person_record_ge(path: str, trans: str = "railway", record_num: int = 10):
+    with open(path, 'r', encoding="utf-8", errors="ignore") as f:
+        user_data = pd.read_csv(f, header=None, dtype=str)
+
+    user_record = {}
+
+    for index, row in user_data.iterrows():
+        if not (trans == "railway" and row[2] == "R") or (trans == "bus" and row[2] == "B"):
+            continue
+
+        user = row[1]
+        if user not in user_record:
+            user_record[user] = 1
+        else:
+            user_record[user] += 1
+
+    user_list = []
+    for user in user_record:
+        if user_record[user] >= record_num:
+            user_list.append(user)
+    return user_list
+
+
 if __name__ == '__main__':
     statistic_record('../DG_data/t000/t000.csv')
+    print(get_person_record_ge('../DG_data/t000/t000.csv', record_num=10))

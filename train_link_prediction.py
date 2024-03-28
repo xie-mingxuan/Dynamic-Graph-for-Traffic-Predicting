@@ -12,6 +12,7 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from evaluate_models_utils import evaluate_model_link_prediction
+from get_statistic_possibility import get_personal_statistic_possibility, update_personal_possibility_matrix, get_total_statistic_possibility, update_total_possibility_matrix
 from models.MemoryModel import MemoryModel, compute_src_dst_node_time_shifts
 from models.TrafficLoss import TrafficLoss
 from models.modules import MergeLayer
@@ -56,11 +57,11 @@ if __name__ == "__main__":
     new_node_test_neg_edge_sampler = NegativeEdgeSampler(src_node_ids=new_node_test_data.src_node_ids, dst_node_ids=new_node_test_data.dst_node_ids, seed=3)
 
     # get data loaders
-    train_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(train_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    new_node_val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    new_node_test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    train_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(train_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=train_data.src_node_ids, get_on_off_label=train_data.labels)
+    val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=val_data.src_node_ids, get_on_off_label=val_data.labels)
+    new_node_val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=new_node_val_data.src_node_ids, get_on_off_label=new_node_val_data.labels)
+    test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=test_data.src_node_ids, get_on_off_label=test_data.labels)
+    new_node_test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=new_node_test_data.src_node_ids, get_on_off_label=new_node_test_data.labels)
 
     val_metric_all_runs, new_node_val_metric_all_runs, test_metric_all_runs, new_node_test_metric_all_runs = [], [], [], []
 
@@ -139,6 +140,18 @@ if __name__ == "__main__":
 
         for epoch in range(args.num_epochs):
 
+            # 统计参数矩阵
+            train_statistic_possibility = get_personal_statistic_possibility(train_data)
+            train_statistic_total_possibility = get_total_statistic_possibility(train_data)
+            val_statistic_possibility = get_personal_statistic_possibility(val_data)
+            val_statistic_total_possibility = get_total_statistic_possibility(val_data)
+            test_statistic_possibility = get_personal_statistic_possibility(test_data)
+            test_statistic_total_possibility = get_total_statistic_possibility(test_data)
+            new_node_val_statistic_possibility = get_personal_statistic_possibility(new_node_val_data)
+            new_node_val_statistic_total_possibility = get_total_statistic_possibility(new_node_val_data)
+            new_node_test_statistic_possibility = get_personal_statistic_possibility(new_node_test_data)
+            new_node_test_statistic_total_possibility = get_total_statistic_possibility(new_node_test_data)
+
             model.train()
             if args.model_name in ['DyRep', 'TGAT', 'TGN', 'CAWN', 'TCL', 'GraphMixer', 'DyGFormer']:
                 # training, only use training graph
@@ -172,6 +185,8 @@ if __name__ == "__main__":
                 if args.model_name in ['TGN']:
                     # 根据 get_on_off_labels 进行筛选，只保留 get_on 或 get_off 的数据，然后再生成 to_predict_source_ids，to_predict_interact_time，to_predict_station_ids
                     flitter_indices = np.where(get_on_off_labels == 1) if not predict_get_on else np.where(get_on_off_labels == 0)
+                    statistic_possibility = update_personal_possibility_matrix(predict_get_on, train_statistic_possibility, batch_src_node_ids, batch_dst_node_ids, get_on_off_labels)
+                    statistic_total_possibility = update_total_possibility_matrix(predict_get_on, train_statistic_total_possibility, batch_src_node_ids, batch_dst_node_ids, get_on_off_labels)
                     flittered_batch_src_node_ids = batch_src_node_ids[flitter_indices]
                     flittered_batch_dst_node_ids = batch_dst_node_ids[flitter_indices]
                     flittered_batch_node_interact_times = batch_node_interact_times[flitter_indices]
@@ -230,12 +245,17 @@ if __name__ == "__main__":
                 if flittered_batch_src_node_ids.size != 0:
                     if multi_GPU_label:
                         all_possibilities = model.module[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
+                        statistic_factor = nn.functional.softmax(model.module[1].statistic_factor, dim=0)
                     else:
                         all_possibilities = model[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
+                        statistic_factor = nn.functional.softmax(model[1].statistic_factor, dim=0)
 
+                    personal_feature_factor = statistic_factor[0]
+                    personal_statistic_factor = statistic_factor[1]
+                    total_statistic_factor = statistic_factor[2]
                     # 将 all_possibilities 切片为二位张量，其中每行都有 station_num 个值，表示用户和所有车站的交互可能性
                     # 对所有的交互可能取最大值，表示本次预测的结果
-                    user_possibilities = all_possibilities.view(-1, station_num)
+                    user_possibilities = personal_feature_factor * all_possibilities.view(-1, station_num) + personal_statistic_factor * convert_to_gpu(statistic_possibility, device=args.device) + total_statistic_factor * convert_to_gpu(statistic_total_possibility, device=args.device)
                     predict_indices = torch.argmax(user_possibilities, dim=1)
                     # 这里将 truth 的标签也视作从 0 开始，在损失函数和评价函数中无需继续改变
                     truth = convert_to_gpu(torch.from_numpy(flittered_batch_dst_node_ids), device=args.device) - 1
@@ -251,6 +271,10 @@ if __name__ == "__main__":
                     optimizer.step()
 
                     train_idx_data_loader_tqdm.set_description(f'Epoch: {epoch + 1}, train for the {batch_idx + 1}-th batch, train loss: {loss.item()}')
+                    # if batch_idx % 10 == 0:
+                    #     print()
+                    #     print(f"personal_feature_factor = {personal_feature_factor}, personal_statistic_factor = {personal_statistic_factor}, total_statistic_factor = {total_statistic_factor}")
+                    #     print()
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                     # detach the memories and raw messages of nodes in the memory bank after each batch, so we don't back propagate to the start of time
@@ -276,7 +300,9 @@ if __name__ == "__main__":
                                                                      num_neighbors=args.num_neighbors,
                                                                      time_gap=args.time_gap,
                                                                      args=args,
-                                                                     multi_gpu=multi_GPU_label)
+                                                                     multi_gpu=multi_GPU_label,
+                                                                     statistic_data=val_statistic_possibility,
+                                                                     total_statistic_data=val_statistic_total_possibility)
 
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                 # backup memory bank after validating so it can be used for testing nodes (since test edges are strictly later in time than validation edges)
@@ -301,7 +327,9 @@ if __name__ == "__main__":
                                                                                        num_neighbors=args.num_neighbors,
                                                                                        time_gap=args.time_gap,
                                                                                        args=args,
-                                                                                       multi_gpu=multi_GPU_label)
+                                                                                       multi_gpu=multi_GPU_label,
+                                                                                       statistic_data=new_node_val_statistic_possibility,
+                                                                                       total_statistic_data=new_node_val_statistic_total_possibility)
 
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                 # reload validation memory bank for testing nodes or saving models
@@ -333,7 +361,9 @@ if __name__ == "__main__":
                                                                            num_neighbors=args.num_neighbors,
                                                                            time_gap=args.time_gap,
                                                                            args=args,
-                                                                           multi_gpu=multi_GPU_label)
+                                                                           multi_gpu=multi_GPU_label,
+                                                                           statistic_data=test_statistic_possibility,
+                                                                           total_statistic_data=test_statistic_total_possibility)
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                     # reload validation memory bank for new testing nodes
@@ -352,7 +382,9 @@ if __name__ == "__main__":
                                                                                              num_neighbors=args.num_neighbors,
                                                                                              time_gap=args.time_gap,
                                                                                              args=args,
-                                                                                             multi_gpu=multi_GPU_label)
+                                                                                             multi_gpu=multi_GPU_label,
+                                                                                             statistic_data=new_node_test_statistic_possibility,
+                                                                                             total_statistic_data=new_node_test_statistic_total_possibility)
 
                 if args.model_name in ['JODIE', 'DyRep', 'TGN']:
                     # reload validation memory bank for testing nodes or saving models
@@ -384,6 +416,15 @@ if __name__ == "__main__":
         # evaluate the best model
         logger.info(f'get final performance on dataset {args.dataset_name}...')
 
+        # 统计参数矩阵
+        val_statistic_possibility = get_personal_statistic_possibility(val_data)
+        val_statistic_total_possibility = get_total_statistic_possibility(val_data)
+        test_statistic_possibility = get_personal_statistic_possibility(test_data)
+        test_statistic_total_possibility = get_total_statistic_possibility(test_data)
+        new_node_val_statistic_possibility = get_personal_statistic_possibility(new_node_val_data)
+        new_node_val_statistic_total_possibility = get_total_statistic_possibility(new_node_val_data)
+        new_node_test_statistic_possibility = get_personal_statistic_possibility(new_node_test_data)
+        new_node_test_statistic_total_possibility = get_total_statistic_possibility(new_node_test_data)
         # the saved best model of memory-based models cannot perform validation since the stored memory has been updated by validation data
         if args.model_name not in ['JODIE', 'DyRep', 'TGN']:
             val_losses, val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
@@ -396,7 +437,9 @@ if __name__ == "__main__":
                                                                      num_neighbors=args.num_neighbors,
                                                                      time_gap=args.time_gap,
                                                                      args=args,
-                                                                     multi_gpu=multi_GPU_label)
+                                                                     multi_gpu=multi_GPU_label,
+                                                                     statistic_data=val_statistic_possibility,
+                                                                     total_statistic_data=val_statistic_total_possibility)
 
             new_node_val_losses, new_node_val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                        model=model,
@@ -408,7 +451,9 @@ if __name__ == "__main__":
                                                                                        num_neighbors=args.num_neighbors,
                                                                                        time_gap=args.time_gap,
                                                                                        args=args,
-                                                                                       multi_gpu=multi_GPU_label)
+                                                                                       multi_gpu=multi_GPU_label,
+                                                                                       statistic_data=new_node_val_statistic_possibility,
+                                                                                       total_statistic_data=new_node_val_statistic_total_possibility)
 
         if args.model_name in ['JODIE', 'DyRep', 'TGN']:
             # the memory in the best model has seen the validation edges, we need to backup the memory for new testing nodes
@@ -427,7 +472,9 @@ if __name__ == "__main__":
                                                                    num_neighbors=args.num_neighbors,
                                                                    time_gap=args.time_gap,
                                                                    args=args,
-                                                                   multi_gpu=multi_GPU_label)
+                                                                   multi_gpu=multi_GPU_label,
+                                                                   statistic_data=test_statistic_possibility,
+                                                                   total_statistic_data=test_statistic_total_possibility)
 
         if args.model_name in ['JODIE', 'DyRep', 'TGN']:
             # reload validation memory bank for new testing nodes
@@ -446,7 +493,9 @@ if __name__ == "__main__":
                                                                                      num_neighbors=args.num_neighbors,
                                                                                      time_gap=args.time_gap,
                                                                                      args=args,
-                                                                                     multi_gpu=multi_GPU_label)
+                                                                                     multi_gpu=multi_GPU_label,
+                                                                                     statistic_data=new_node_test_statistic_possibility,
+                                                                                     total_statistic_data=new_node_test_statistic_total_possibility)
         # store the evaluation metrics at the current run
         val_metric_dict, new_node_val_metric_dict, test_metric_dict, new_node_test_metric_dict = {}, {}, {}, {}
 

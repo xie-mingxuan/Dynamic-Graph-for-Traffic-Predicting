@@ -9,6 +9,7 @@ import argparse
 import os
 import json
 
+from get_statistic_possibility import update_personal_possibility_matrix, update_total_possibility_matrix
 from models.EdgeBank import edge_bank_link_prediction
 from utils.metrics import get_link_prediction_metrics, get_node_classification_metrics, get_link_prediction_metrics_multiclass
 from utils.utils import set_random_seed, convert_to_gpu
@@ -18,7 +19,8 @@ from utils.DataLoader import Data
 
 def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_sampler: NeighborSampler, evaluate_idx_data_loader: DataLoader,
                                    evaluate_neg_edge_sampler: NegativeEdgeSampler, evaluate_data: Data, loss_func: nn.Module,
-                                   num_neighbors: int = 20, time_gap: int = 2000, predict_get_on: bool = False, args: argparse.Namespace = None, multi_gpu: bool = False):
+                                   num_neighbors: int = 20, time_gap: int = 2000, predict_get_on: bool = False, args: argparse.Namespace = None, multi_gpu: bool = False,
+                                   statistic_data: dict = None, total_statistic_data: dict = None):
     """
     evaluate models on the link prediction task
     :param model_name: str, name of the model
@@ -33,6 +35,8 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
     :param predict_get_on: if the job is to predict get on station
     :param args: argparse.Namespace, configuration
     :param multi_gpu: bool, if you use multi-GPU
+    :param statistic_data: dict, the statistic data
+    :param total_statistic_data: dict, the total statistic data
     :return:
     """
     # Ensures the random sampler uses a fixed seed for evaluation (i.e. we always sample the same negatives for validation / test set)
@@ -74,25 +78,10 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
             all_predict_station_ids = np.array(list(range(1, station_num + 1)))
             to_predict_station_ids = np.array([], dtype=int)
             if model_name in ['TGN']:
-                # 更新 memory 用，不做预测
-                if multi_gpu:
-                    model.module[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                             dst_node_ids=batch_dst_node_ids,
-                                                                             node_interact_times=batch_node_interact_times,
-                                                                             edge_ids=batch_edge_ids,
-                                                                             edges_are_positive=True,
-                                                                             num_neighbors=num_neighbors)
-                else:
-                    batch_src_node_embeddings, batch_dst_node_embeddings = \
-                        model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                          dst_node_ids=batch_dst_node_ids,
-                                                                          node_interact_times=batch_node_interact_times,
-                                                                          edge_ids=batch_edge_ids,
-                                                                          edges_are_positive=True,
-                                                                          num_neighbors=num_neighbors)
-
                 # 根据 get_on_off_labels 进行筛选，只保留 get_on 或 get_off 的数据，然后再生成 to_predict_source_ids，to_predict_interact_time，to_predict_station_ids
                 flitter_indices = np.where(get_on_off_labels == 1) if not predict_get_on else np.where(get_on_off_labels == 0)
+                statistic_possibility = update_personal_possibility_matrix(predict_get_on, statistic_data, batch_src_node_ids, batch_dst_node_ids, get_on_off_labels)
+                total_statistic_possibility = update_total_possibility_matrix(predict_get_on, total_statistic_data, batch_src_node_ids, batch_dst_node_ids, get_on_off_labels)
                 flittered_batch_src_node_ids = batch_src_node_ids[flitter_indices]
                 flittered_batch_dst_node_ids = batch_dst_node_ids[flitter_indices]
                 flittered_batch_node_interact_times = batch_node_interact_times[flitter_indices]
@@ -123,6 +112,23 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                                                                           edge_ids=None,
                                                                           edges_are_positive=False,
                                                                           num_neighbors=num_neighbors)
+
+                # 更新 memory 用，不做预测
+                if multi_gpu:
+                    model.module[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                             dst_node_ids=batch_dst_node_ids,
+                                                                             node_interact_times=batch_node_interact_times,
+                                                                             edge_ids=batch_edge_ids,
+                                                                             edges_are_positive=True,
+                                                                             num_neighbors=num_neighbors)
+                else:
+                    batch_src_node_embeddings, batch_dst_node_embeddings = \
+                        model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                          dst_node_ids=batch_dst_node_ids,
+                                                                          node_interact_times=batch_node_interact_times,
+                                                                          edge_ids=batch_edge_ids,
+                                                                          edges_are_positive=True,
+                                                                          num_neighbors=num_neighbors)
             else:
                 raise ValueError(f"Wrong value for model_name {model_name}!")
 
@@ -130,12 +136,18 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                 # 本 batch 中所有的交互可能性
                 if multi_gpu:
                     all_possibilities = model.module[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
+                    statistic_factor = nn.functional.softmax(model.module[1].statistic_factor, dim=0)
                 else:
                     all_possibilities = model[1](input_1=predict_src_embeddings, input_2=predict_dst_embeddings).squeeze(dim=-1).sigmoid()
+                    statistic_factor = nn.functional.softmax(model[1].statistic_factor, dim=0)
+
+                personal_feature_factor = statistic_factor[0]
+                personal_statistic_factor = statistic_factor[1]
+                total_statistic_factor = statistic_factor[2]
 
                 # 将 all_possibilities 切片为二位张量，其中每行都有 station_num 个值，表示用户和所有车站的交互可能性
                 # 对所有的交互可能取最大值，表示本次预测的结果
-                user_possibilities = all_possibilities.view(-1, station_num)
+                user_possibilities = personal_feature_factor * all_possibilities.view(-1, station_num) + personal_statistic_factor * convert_to_gpu(statistic_possibility, device=args.device) + total_statistic_factor * convert_to_gpu(total_statistic_possibility, device=args.device)
                 predict_indices = torch.argmax(user_possibilities, dim=1)
                 # 这里将 truth 的标签也视作从 0 开始，在损失函数和评价函数中无需继续改变
                 truth = convert_to_gpu(torch.from_numpy(flittered_batch_dst_node_ids), device=args.device) - 1

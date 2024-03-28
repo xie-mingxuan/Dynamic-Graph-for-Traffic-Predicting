@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 
 from evaluate_models_utils import evaluate_model_link_prediction, evaluate_edge_bank_link_prediction
+from get_statistic_possibility import get_personal_statistic_possibility, get_total_statistic_possibility
 from models.MemoryModel import MemoryModel, compute_src_dst_node_time_shifts
 from models.TrafficLoss import TrafficLoss
 from models.modules import MergeLayer
@@ -60,14 +61,24 @@ if __name__ == "__main__":
         new_node_test_neg_edge_sampler = NegativeEdgeSampler(src_node_ids=new_node_test_data.src_node_ids, dst_node_ids=new_node_test_data.dst_node_ids, seed=3)
 
     # get data loaders
-    val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    new_node_val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    new_node_test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=val_data.src_node_ids, get_on_off_label=val_data.labels)
+    new_node_val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=new_node_val_data.src_node_ids, get_on_off_label=new_node_val_data.labels)
+    test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=test_data.src_node_ids, get_on_off_label=test_data.labels)
+    new_node_test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False, source_node_id=new_node_test_data.src_node_ids, get_on_off_label=new_node_test_data.labels)
 
     val_metric_all_runs, new_node_val_metric_all_runs, test_metric_all_runs, new_node_test_metric_all_runs = [], [], [], []
 
     for run in range(args.num_runs):
+
+        # 统计参数矩阵
+        val_statistic_possibility = get_personal_statistic_possibility(val_data)
+        val_total_statistic_possibility = get_total_statistic_possibility(val_data)
+        test_statistic_possibility = get_personal_statistic_possibility(test_data)
+        test_total_statistic_possibility = get_total_statistic_possibility(test_data)
+        new_node_val_statistic_possibility = get_personal_statistic_possibility(new_node_val_data)
+        new_node_val_total_statistic_possibility = get_total_statistic_possibility(new_node_val_data)
+        new_node_test_statistic_possibility = get_personal_statistic_possibility(new_node_test_data)
+        new_node_test_total_statistic_possibility = get_total_statistic_possibility(new_node_test_data)
 
         set_random_seed(seed=run)
 
@@ -150,7 +161,9 @@ if __name__ == "__main__":
                                                                      evaluate_data=val_data,
                                                                      loss_func=loss_func,
                                                                      num_neighbors=args.num_neighbors,
-                                                                     time_gap=args.time_gap)
+                                                                     time_gap=args.time_gap,
+                                                                     statistic_data=val_statistic_possibility,
+                                                                     total_statistic_data=val_total_statistic_possibility)
 
             new_node_val_losses, new_node_val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                        model=model,
@@ -160,7 +173,9 @@ if __name__ == "__main__":
                                                                                        evaluate_data=new_node_val_data,
                                                                                        loss_func=loss_func,
                                                                                        num_neighbors=args.num_neighbors,
-                                                                                       time_gap=args.time_gap)
+                                                                                       time_gap=args.time_gap,
+                                                                                       statistic_data=new_node_val_statistic_possibility,
+                                                                                       total_statistic_data=new_node_val_total_statistic_possibility)
 
         if args.model_name in ['JODIE', 'DyRep', 'TGN']:
             # the memory in the best model has seen the validation edges, we need to backup the memory for new testing nodes
@@ -175,7 +190,9 @@ if __name__ == "__main__":
                                                                    loss_func=loss_func,
                                                                    num_neighbors=args.num_neighbors,
                                                                    time_gap=args.time_gap,
-                                                                   args=args)
+                                                                   args=args,
+                                                                   statistic_data=test_statistic_possibility,
+                                                                   total_statistic_data=test_total_statistic_possibility)
 
         if args.model_name in ['JODIE', 'DyRep', 'TGN']:
             # reload validation memory bank for new testing nodes
@@ -189,7 +206,9 @@ if __name__ == "__main__":
                                                                                      evaluate_data=new_node_test_data,
                                                                                      loss_func=loss_func,
                                                                                      num_neighbors=args.num_neighbors,
-                                                                                     time_gap=args.time_gap)
+                                                                                     time_gap=args.time_gap,
+                                                                                     statistic_data=new_node_test_statistic_possibility,
+                                                                                     total_statistic_data=new_node_test_total_statistic_possibility)
         # store the evaluation metrics at the current run
         val_metric_dict, new_node_val_metric_dict, test_metric_dict, new_node_test_metric_dict = {}, {}, {}, {}
 

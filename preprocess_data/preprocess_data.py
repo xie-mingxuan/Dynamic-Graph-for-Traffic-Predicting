@@ -86,7 +86,7 @@ def reindex(df: pd.DataFrame, bipartite: bool = True, is_traffic: bool = False):
     return new_df
 
 
-def preprocess_data(dataset_name: str, bipartite: bool = True, node_feat_dim: int = 16):
+def preprocess_data(dataset_name: str, bipartite: bool = True, node_feat_dim: int = 8):
     """
     preprocess the data
     :param dataset_name: str, dataset name
@@ -164,8 +164,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_name', type=str,
                         choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci',
                                  'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts', 't000', 't059'],
-                        help='Dataset name', default='t059')
-    parser.add_argument('--node_feat_dim', type=int, default=16, help='Number of node raw features')
+                        help='Dataset name', default='t483')
+    parser.add_argument('--node_feat_dim', type=int, default=8, help='Number of node raw features')
 
     args = parser.parse_args()
 

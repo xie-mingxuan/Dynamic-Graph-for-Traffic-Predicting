@@ -54,6 +54,8 @@ class MergeLayer(nn.Module):
         self.fc2 = nn.Linear(hidden_dim, output_dim)
         self.act = nn.ReLU()
 
+        self.statistic_factor = nn.Parameter(torch.randn(3))
+
     def forward(self, input_1: torch.Tensor, input_2: torch.Tensor):
         """
         merge and project the inputs
