@@ -171,7 +171,7 @@ def get_link_prediction_data(dataset_name: str, val_ratio: float, test_ratio: fl
         if row.u not in user_based_list:
             user_based_list[row.u] = {
                 "data": [],
-                "train_time": 0.,
+                "test_time": 0.,
                 "val_time": 0.,
             }
         user_based_list[row.u]["data"].append(row.ts)

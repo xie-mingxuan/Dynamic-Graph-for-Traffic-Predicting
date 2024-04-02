@@ -124,12 +124,25 @@ class MemoryModel(torch.nn.Module):
                                                                                      node_time_intervals=node_time_intervals)
         elif self.model_name in ['TGN', 'DyRep']:
             # Tensor, shape (2 * batch_size, node_feat_dim)
-            node_embeddings = self.embedding_module.compute_node_temporal_embeddings(node_memories=updated_node_memories,
-                                                                                     node_ids=node_ids,
-                                                                                     node_interact_times=np.concatenate([node_interact_times,
-                                                                                                                         node_interact_times]),
-                                                                                     current_layer_num=self.num_layers,
-                                                                                     num_neighbors=num_neighbors)
+            # node_embeddings = self.embedding_module.compute_node_temporal_embeddings(node_memories=updated_node_memories,
+            #                                                                          node_ids=node_ids,
+            #                                                                          node_interact_times=np.concatenate([node_interact_times,
+            #                                                                                                              node_interact_times]),
+            #                                                                          current_layer_num=self.num_layers,
+            #                                                                          num_neighbors=num_neighbors)
+            # 修改为 src_node 需要考虑邻居计算 embedding, dst_node 不需要
+            src_node_embeddings = self.embedding_module.compute_node_temporal_embeddings(node_memories=updated_node_memories,
+                                                                                         node_ids=src_node_ids,
+                                                                                         node_interact_times=node_interact_times,
+                                                                                         current_layer_num=self.num_layers,
+                                                                                         num_neighbors=num_neighbors)
+
+            dst_node_embeddings = self.embedding_module.compute_node_temporal_embeddings(node_memories=updated_node_memories,
+                                                                                         node_ids=dst_node_ids,
+                                                                                         node_interact_times=node_interact_times,
+                                                                                         current_layer_num=0)
+            node_embeddings = torch.cat((src_node_embeddings, dst_node_embeddings), dim=0)
+
         else:
             raise ValueError(f'Not implemented error for model_name {self.model_name}!')
 
