@@ -1,9 +1,12 @@
+import re
+
 import numpy as np
 import pandas as pd
 from pathlib import Path
 import argparse
 from pandas.testing import assert_frame_equal
 from distutils.dir_util import copy_tree
+from formate_data import format_csv
 
 
 def preprocess(dataset_name: str):
@@ -53,7 +56,7 @@ def preprocess(dataset_name: str):
                          'idx': idx_list}), np.array(feat_l)
 
 
-def reindex(df: pd.DataFrame, bipartite: bool = True):
+def reindex(df: pd.DataFrame, bipartite: bool = True, is_traffic: bool = False):
     """
     reindex the ids of nodes and edges
     :param df: DataFrame
@@ -68,10 +71,12 @@ def reindex(df: pd.DataFrame, bipartite: bool = True):
         assert df.u.min() == df.i.min() == 0
 
         # if bipartite, discriminate the source and target node by unique ids (target node id is counted based on source node id)
-        upper_u = df.u.max() + 1
-        new_i = df.i + upper_u
+        upper_station = df.i.max() + 1
+        if is_traffic:
+            upper_station = 392
+        new_u = df.u + upper_station
 
-        new_df.i = new_i
+        new_df.u = new_u
 
     # make the id start from 1
     new_df.u += 1
@@ -81,7 +86,7 @@ def reindex(df: pd.DataFrame, bipartite: bool = True):
     return new_df
 
 
-def preprocess_data(dataset_name: str, bipartite: bool = True, node_feat_dim: int = 172):
+def preprocess_data(dataset_name: str, bipartite: bool = True, node_feat_dim: int = 8):
     """
     preprocess the data
     :param dataset_name: str, dataset name
@@ -95,8 +100,12 @@ def preprocess_data(dataset_name: str, bipartite: bool = True, node_feat_dim: in
     OUT_FEAT = '../processed_data/{}/ml_{}.npy'.format(dataset_name, dataset_name)
     OUT_NODE_FEAT = '../processed_data/{}/ml_{}_node.npy'.format(dataset_name, dataset_name)
 
-    df, edge_feats = preprocess(PATH)
-    new_df = reindex(df, bipartite)
+    if re.match(r'^t\d{3}$', dataset_name):
+        df, edge_feats = format_csv(PATH)
+        new_df = reindex(df, bipartite, is_traffic=True)
+    else:
+        df, edge_feats = preprocess(PATH)
+        new_df = reindex(df, bipartite)
 
     # edge feature for zero index, which is not used (since edge id starts from 1)
     empty = np.zeros(edge_feats.shape[1])[np.newaxis, :]
@@ -150,28 +159,29 @@ def check_data(dataset_name: str):
     assert origin_n_feat.shape == n_feat.shape and origin_n_feat.max() == n_feat.max() and origin_n_feat.min() == n_feat.min()
 
 
-parser = argparse.ArgumentParser('Interface for preprocessing datasets')
-parser.add_argument('--dataset_name', type=str,
-                    choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci',
-                             'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts'],
-                    help='Dataset name', default='wikipedia')
-parser.add_argument('--node_feat_dim', type=int, default=172, help='Number of node raw features')
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('Interface for preprocessing datasets')
+    parser.add_argument('--dataset_name', type=str,
+                        choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci',
+                                 'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts', 't000', 't018'],
+                        help='Dataset name', default='t000')
+    parser.add_argument('--node_feat_dim', type=int, default=8, help='Number of node raw features')
 
-args = parser.parse_args()
+    args = parser.parse_args()
 
-print(f'preprocess dataset {args.dataset_name}...')
-if args.dataset_name in ['enron', 'SocialEvo', 'uci']:
-    Path("../processed_data/{}/".format(args.dataset_name)).mkdir(parents=True, exist_ok=True)
-    copy_tree("../DG_data/{}/".format(args.dataset_name), "../processed_data/{}/".format(args.dataset_name))
-    print(f'the original dataset of {args.dataset_name} is unavailable, directly use the processed dataset by previous works.')
-else:
-    # bipartite dataset
-    if args.dataset_name in ['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket']:
-        preprocess_data(dataset_name=args.dataset_name, bipartite=True, node_feat_dim=args.node_feat_dim)
+    print(f'preprocess dataset {args.dataset_name}...')
+    if args.dataset_name in ['enron', 'SocialEvo', 'uci']:
+        Path("../processed_data/{}/".format(args.dataset_name)).mkdir(parents=True, exist_ok=True)
+        copy_tree("../DG_data/{}/".format(args.dataset_name), "../processed_data/{}/".format(args.dataset_name))
+        print(f'the original dataset of {args.dataset_name} is unavailable, directly use the processed dataset by previous works.')
     else:
-        preprocess_data(dataset_name=args.dataset_name, bipartite=False, node_feat_dim=args.node_feat_dim)
-    print(f'{args.dataset_name} is processed successfully.')
+        # bipartite dataset
+        if args.dataset_name in ['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket'] or re.match(r'^t\d{3}$', args.dataset_name):
+            preprocess_data(dataset_name=args.dataset_name, bipartite=True, node_feat_dim=args.node_feat_dim)
+        else:
+            preprocess_data(dataset_name=args.dataset_name, bipartite=False, node_feat_dim=args.node_feat_dim)
+        print(f'{args.dataset_name} is processed successfully.')
 
-    if args.dataset_name not in ['myket']:
-        check_data(args.dataset_name)
-    print(f'{args.dataset_name} passes the checks successfully.')
+        if args.dataset_name not in ['myket'] and not re.match(r'^t\d{3}$', args.dataset_name):
+            check_data(args.dataset_name)
+        print(f'{args.dataset_name} passes the checks successfully.')

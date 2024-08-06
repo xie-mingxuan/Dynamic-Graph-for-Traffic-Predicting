@@ -4,6 +4,7 @@ import torch.nn as nn
 import numpy as np
 
 from utils.DataLoader import Data
+from .HistoricalInteractionSampler import HistoricalInteractionSampler
 
 
 def set_random_seed(seed: int = 0):
@@ -280,7 +281,7 @@ class NeighborSampler:
         self.random_state = np.random.RandomState(self.seed)
 
 
-def get_neighbor_sampler(data: Data, sample_neighbor_strategy: str = 'uniform', time_scaling_factor: float = 0.0, seed: int = None):
+def get_neighbor_sampler(data: Data, sample_neighbor_strategy: str = 'uniform', time_scaling_factor: float = 0.0, seed: int = None, type: str = 'neighbor'):
     """
     get neighbor sampler
     :param data: Data
@@ -299,7 +300,10 @@ def get_neighbor_sampler(data: Data, sample_neighbor_strategy: str = 'uniform', 
         adj_list[src_node_id].append((dst_node_id, edge_id, node_interact_time))
         adj_list[dst_node_id].append((src_node_id, edge_id, node_interact_time))
 
-    return NeighborSampler(adj_list=adj_list, sample_neighbor_strategy=sample_neighbor_strategy, time_scaling_factor=time_scaling_factor, seed=seed)
+    if type == 'neighbor':
+        return NeighborSampler(adj_list=adj_list, sample_neighbor_strategy=sample_neighbor_strategy, time_scaling_factor=time_scaling_factor, seed=seed)
+    else:
+        return HistoricalInteractionSampler(adj_list=adj_list)
 
 
 class NegativeEdgeSampler(object):

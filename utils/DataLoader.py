@@ -3,6 +3,8 @@ import numpy as np
 import random
 import pandas as pd
 
+from utils.TimeBasedDataloader import TimeBasedDataset
+
 
 class CustomizedDataset(Dataset):
     def __init__(self, indices_list: list):
@@ -112,7 +114,7 @@ def get_link_prediction_data(dataset_name: str, val_ratio: float, test_ratio: fl
     # compute nodes which appear at test time
     test_node_set = set(src_node_ids[node_interact_times > val_time]).union(set(dst_node_ids[node_interact_times > val_time]))
     # sample nodes which we keep as new nodes (to test inductiveness), so then we have to remove all their edges from training
-    new_test_node_set = set(random.sample(test_node_set, int(0.1 * num_total_unique_node_ids)))
+    new_test_node_set = set(random.sample(list(test_node_set), int(0.1 * num_total_unique_node_ids)))
 
     # mask for each source and destination to denote whether they are new test nodes
     new_test_source_mask = graph_df.u.map(lambda x: x in new_test_node_set).values
@@ -228,3 +230,16 @@ def get_node_classification_data(dataset_name: str, val_ratio: float, test_ratio
                      node_interact_times=node_interact_times[test_mask], edge_ids=edge_ids[test_mask], labels=labels[test_mask])
 
     return node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data
+
+
+def get_idx_time_based_data_loader(timestamp_list: list, time_gap: int, shuffle: bool):
+    """
+    get data loader that iterates over indices
+    :param timestamp_list: list, timestamp list
+    :param time_gap: int, time gap
+    :param shuffle: boolean, whether to shuffle the data
+    :return: data_loader, DataLoader
+    """
+    dataset = TimeBasedDataset(timestamp_list, time_gap)
+    data_loader = DataLoader(dataset=dataset, batch_size=1, shuffle=shuffle, drop_last=False)
+    return data_loader

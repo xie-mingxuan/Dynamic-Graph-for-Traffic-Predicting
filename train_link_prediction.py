@@ -10,22 +10,29 @@ import json
 import torch
 import torch.nn as nn
 
+from models.DyGPP import DyGPPModel
+from models.GRU import GRUModel
+from models.LSTMModel import LSTMModel
+from models.PersonalTOP import PersonalTOPModel
 from models.TGAT import TGAT
 from models.MemoryModel import MemoryModel, compute_src_dst_node_time_shifts
 from models.CAWN import CAWN
 from models.TCL import TCL
 from models.GraphMixer import GraphMixer
 from models.DyGFormer import DyGFormer
+from models.DyGSP import DyGSPModel
+from models.TOP import TOPModel
 from models.modules import MergeLayer
 from utils.utils import set_random_seed, convert_to_gpu, get_parameter_sizes, create_optimizer
 from utils.utils import get_neighbor_sampler, NegativeEdgeSampler
 from evaluate_models_utils import evaluate_model_link_prediction
 from utils.metrics import get_link_prediction_metrics
-from utils.DataLoader import get_idx_data_loader, get_link_prediction_data
+from utils.DataLoader import get_idx_data_loader, get_link_prediction_data, get_idx_time_based_data_loader
 from utils.EarlyStopping import EarlyStopping
 from utils.load_configs import get_link_prediction_args
 
 if __name__ == "__main__":
+    torch.set_num_threads(1)
 
     warnings.filterwarnings('ignore')
 
@@ -44,6 +51,14 @@ if __name__ == "__main__":
     full_neighbor_sampler = get_neighbor_sampler(data=full_data, sample_neighbor_strategy=args.sample_neighbor_strategy,
                                                  time_scaling_factor=args.time_scaling_factor, seed=1)
 
+    sequence_train_sampler = get_neighbor_sampler(data=train_data, sample_neighbor_strategy=args.sample_neighbor_strategy,
+                                                  time_scaling_factor=args.time_scaling_factor, seed=1, type="all")
+
+    sequence_all_sampler = get_neighbor_sampler(data=full_data, sample_neighbor_strategy=args.sample_neighbor_strategy,
+                                                time_scaling_factor=args.time_scaling_factor, seed=1, type="all")
+
+    evaluate_sampler = sequence_all_sampler if args.model_name in ['LSTM', 'GRU'] else full_neighbor_sampler
+
     # initialize negative samplers, set seeds for validation and testing so negatives are the same across different runs
     # in the inductive setting, negatives are sampled only amongst other new nodes
     # train negative edge sampler does not need to specify the seed, but evaluation samplers need to do so
@@ -54,20 +69,27 @@ if __name__ == "__main__":
     new_node_test_neg_edge_sampler = NegativeEdgeSampler(src_node_ids=new_node_test_data.src_node_ids, dst_node_ids=new_node_test_data.dst_node_ids, seed=3)
 
     # get data loaders
-    train_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(train_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    new_node_val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    new_node_test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    train_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=train_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    val_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=val_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    new_node_val_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=new_node_val_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    test_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=test_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    new_node_test_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=new_node_test_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    # train_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(train_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    # val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    # new_node_val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    # test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    # new_node_test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
 
     val_metric_all_runs, new_node_val_metric_all_runs, test_metric_all_runs, new_node_test_metric_all_runs = [], [], [], []
+    current_time = time.time()
+    time_cost_list = []
 
     for run in range(args.num_runs):
 
         set_random_seed(seed=run)
 
         args.seed = run
-        args.save_model_name = f'{args.model_name}_seed{args.seed}'
+        args.save_model_name = f'{args.model_name}_seed{args.seed}_len{args.max_input_sequence_length}'
 
         # set up logger
         logging.basicConfig(level=logging.INFO)
@@ -121,6 +143,73 @@ if __name__ == "__main__":
                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+        elif args.model_name == 'DyGSP':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+        elif args.model_name == 'DyGPP':
+            dynamic_backbone = DyGPPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+        elif args.model_name == 'DyGSP-transformer':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, encoder="transformer")
+        elif args.model_name == 'DyGSP-LSTM':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, encoder="LSTM")
+        elif args.model_name == 'DyGSP-MLP':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, encoder="MLP")
+        elif args.model_name == 'DyGSP-wo-node':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, without='node', encoder="MLP")
+        elif args.model_name == 'DyGSP-wo-edge':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, without='edge', encoder="MLP")
+        elif args.model_name == 'DyGSP-wo-time':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, without='time', encoder="MLP")
+        elif args.model_name == 'DyGSP-wo-neighbour':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, without='neighbour', encoder="MLP")
+        elif args.model_name == 'DyGSP-wo-neighbour-self':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, ablation='self', encoder="MLP")
+        elif args.model_name == 'DyGSP-wo-neighbour-cross':
+            dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
+                                          time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                          num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                          max_input_sequence_length=args.max_input_sequence_length, device=args.device, ablation='cross', encoder="MLP")
+        elif args.model_name == 'LSTM':
+            dynamic_backbone = LSTMModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=sequence_train_sampler,
+                                         time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, num_layers=args.num_layers,
+                                         dropout=args.dropout, max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+        elif args.model_name == 'GRU':
+            dynamic_backbone = GRUModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=sequence_train_sampler,
+                                        time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, num_layers=args.num_layers,
+                                        dropout=args.dropout, max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+        elif args.model_name == 'TOP':
+            dynamic_backbone = TOPModel()
+        elif args.model_name == 'PersonalTOP':
+            dynamic_backbone = PersonalTOPModel()
         else:
             raise ValueError(f"Wrong value for model_name {args.model_name}!")
         link_predictor = MergeLayer(input_dim1=node_raw_features.shape[1], input_dim2=node_raw_features.shape[1],
@@ -146,7 +235,9 @@ if __name__ == "__main__":
         for epoch in range(args.num_epochs):
 
             model.train()
-            if args.model_name in ['DyRep', 'TGAT', 'TGN', 'CAWN', 'TCL', 'GraphMixer', 'DyGFormer']:
+            if args.model_name in ['DyRep', 'TGAT', 'TGN', 'CAWN', 'TCL', 'GraphMixer', 'DyGFormer',
+                                   'DyGSP', 'DyGSP-transformer', 'DyGSP-LSTM', 'DyGSP-MLP', 'DyGPP',
+                                   'DyGSP-wo-node', 'DyGSP-wo-edge', 'DyGSP-w/o-time', 'DyGSP-w/o-neighbour', 'DyGSP-wo-neighbour-self', 'DyGSP-wo-neighbour-cross']:
                 # training, only use training graph
                 model[0].set_neighbor_sampler(train_neighbor_sampler)
             if args.model_name in ['JODIE', 'DyRep', 'TGN']:
@@ -159,8 +250,8 @@ if __name__ == "__main__":
             for batch_idx, train_data_indices in enumerate(train_idx_data_loader_tqdm):
                 train_data_indices = train_data_indices.numpy()
                 batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids = \
-                    train_data.src_node_ids[train_data_indices], train_data.dst_node_ids[train_data_indices], \
-                    train_data.node_interact_times[train_data_indices], train_data.edge_ids[train_data_indices]
+                    train_data.src_node_ids[train_data_indices][0], train_data.dst_node_ids[train_data_indices][0], \
+                        train_data.node_interact_times[train_data_indices][0], train_data.edge_ids[train_data_indices][0]
 
                 _, batch_neg_dst_node_ids = train_neg_edge_sampler.sample(size=len(batch_src_node_ids))
                 batch_neg_src_node_ids = batch_src_node_ids
@@ -223,7 +314,8 @@ if __name__ == "__main__":
                                                                           node_interact_times=batch_node_interact_times,
                                                                           num_neighbors=args.num_neighbors,
                                                                           time_gap=args.time_gap)
-                elif args.model_name in ['DyGFormer']:
+                elif args.model_name in ['DyGFormer', 'DyGSP', 'LSTM', 'GRU', 'DyGSP-transformer', 'DyGSP-LSTM', 'DyGSP-MLP', 'DyGPP',
+                                         'DyGSP-wo-node', 'DyGSP-wo-edge', 'DyGSP-wo-time', 'DyGSP-wo-neighbour', 'DyGSP-wo-neighbour-self', 'DyGSP-wo-neighbour-cross']:
                     # get temporal embedding of source and destination nodes
                     # two Tensors, with shape (batch_size, node_feat_dim)
                     batch_src_node_embeddings, batch_dst_node_embeddings = \
@@ -237,11 +329,25 @@ if __name__ == "__main__":
                         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
                                                                           dst_node_ids=batch_neg_dst_node_ids,
                                                                           node_interact_times=batch_node_interact_times)
+                elif args.model_name in ['TOP', 'PersonalTOP']:
+                    negative_probabilities = model[0].get_possibility(src_node_ids=batch_neg_src_node_ids,
+                                                                      dst_node_ids=batch_neg_dst_node_ids,
+                                                                      get_on_off_labels=train_data.labels[train_data_indices][0],
+                                                                      negative_sampling=True)
+                    positive_probabilities = model[0].get_possibility(src_node_ids=batch_src_node_ids,
+                                                                      dst_node_ids=batch_dst_node_ids,
+                                                                      get_on_off_labels=train_data.labels[train_data_indices][0],
+                                                                      negative_sampling=True)
+                    model[0].train_model(src_node_ids=batch_src_node_ids,
+                                         dst_node_ids=batch_dst_node_ids,
+                                         get_on_off_labels=train_data.labels[train_data_indices][0])
                 else:
                     raise ValueError(f"Wrong value for model_name {args.model_name}!")
-                # get positive and negative probabilities, shape (batch_size, )
-                positive_probabilities = model[1](input_1=batch_src_node_embeddings, input_2=batch_dst_node_embeddings).squeeze(dim=-1).sigmoid()
-                negative_probabilities = model[1](input_1=batch_neg_src_node_embeddings, input_2=batch_neg_dst_node_embeddings).squeeze(dim=-1).sigmoid()
+
+                if args.model_name not in ['TOP', 'PersonalTOP']:
+                    # get positive and negative probabilities, shape (batch_size, )
+                    positive_probabilities = model[1](input_1=batch_src_node_embeddings, input_2=batch_dst_node_embeddings).squeeze(dim=-1).sigmoid()
+                    negative_probabilities = model[1](input_1=batch_neg_src_node_embeddings, input_2=batch_neg_dst_node_embeddings).squeeze(dim=-1).sigmoid()
 
                 predicts = torch.cat([positive_probabilities, negative_probabilities], dim=0)
                 labels = torch.cat([torch.ones_like(positive_probabilities), torch.zeros_like(negative_probabilities)], dim=0)
@@ -252,9 +358,10 @@ if __name__ == "__main__":
 
                 train_metrics.append(get_link_prediction_metrics(predicts=predicts, labels=labels))
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                if args.model_name not in ['TOP', 'PersonalTOP']:
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
                 train_idx_data_loader_tqdm.set_description(f'Epoch: {epoch + 1}, train for the {batch_idx + 1}-th batch, train loss: {loss.item()}')
 
@@ -268,7 +375,7 @@ if __name__ == "__main__":
 
             val_losses, val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                      model=model,
-                                                                     neighbor_sampler=full_neighbor_sampler,
+                                                                     neighbor_sampler=evaluate_sampler,
                                                                      evaluate_idx_data_loader=val_idx_data_loader,
                                                                      evaluate_neg_edge_sampler=val_neg_edge_sampler,
                                                                      evaluate_data=val_data,
@@ -285,7 +392,7 @@ if __name__ == "__main__":
 
             new_node_val_losses, new_node_val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                        model=model,
-                                                                                       neighbor_sampler=full_neighbor_sampler,
+                                                                                       neighbor_sampler=evaluate_sampler,
                                                                                        evaluate_idx_data_loader=new_node_val_idx_data_loader,
                                                                                        evaluate_neg_edge_sampler=new_node_val_neg_edge_sampler,
                                                                                        evaluate_data=new_node_val_data,
@@ -312,7 +419,7 @@ if __name__ == "__main__":
             if (epoch + 1) % args.test_interval_epochs == 0:
                 test_losses, test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                            model=model,
-                                                                           neighbor_sampler=full_neighbor_sampler,
+                                                                           neighbor_sampler=evaluate_sampler,
                                                                            evaluate_idx_data_loader=test_idx_data_loader,
                                                                            evaluate_neg_edge_sampler=test_neg_edge_sampler,
                                                                            evaluate_data=test_data,
@@ -326,7 +433,7 @@ if __name__ == "__main__":
 
                 new_node_test_losses, new_node_test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                              model=model,
-                                                                                             neighbor_sampler=full_neighbor_sampler,
+                                                                                             neighbor_sampler=evaluate_sampler,
                                                                                              evaluate_idx_data_loader=new_node_test_idx_data_loader,
                                                                                              evaluate_neg_edge_sampler=new_node_test_neg_edge_sampler,
                                                                                              evaluate_data=new_node_test_data,
@@ -365,7 +472,7 @@ if __name__ == "__main__":
         if args.model_name not in ['JODIE', 'DyRep', 'TGN']:
             val_losses, val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                      model=model,
-                                                                     neighbor_sampler=full_neighbor_sampler,
+                                                                     neighbor_sampler=evaluate_sampler,
                                                                      evaluate_idx_data_loader=val_idx_data_loader,
                                                                      evaluate_neg_edge_sampler=val_neg_edge_sampler,
                                                                      evaluate_data=val_data,
@@ -375,7 +482,7 @@ if __name__ == "__main__":
 
             new_node_val_losses, new_node_val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                        model=model,
-                                                                                       neighbor_sampler=full_neighbor_sampler,
+                                                                                       neighbor_sampler=evaluate_sampler,
                                                                                        evaluate_idx_data_loader=new_node_val_idx_data_loader,
                                                                                        evaluate_neg_edge_sampler=new_node_val_neg_edge_sampler,
                                                                                        evaluate_data=new_node_val_data,
@@ -389,7 +496,7 @@ if __name__ == "__main__":
 
         test_losses, test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                    model=model,
-                                                                   neighbor_sampler=full_neighbor_sampler,
+                                                                   neighbor_sampler=evaluate_sampler,
                                                                    evaluate_idx_data_loader=test_idx_data_loader,
                                                                    evaluate_neg_edge_sampler=test_neg_edge_sampler,
                                                                    evaluate_data=test_data,
@@ -403,7 +510,7 @@ if __name__ == "__main__":
 
         new_node_test_losses, new_node_test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                      model=model,
-                                                                                     neighbor_sampler=full_neighbor_sampler,
+                                                                                     neighbor_sampler=evaluate_sampler,
                                                                                      evaluate_idx_data_loader=new_node_test_idx_data_loader,
                                                                                      evaluate_neg_edge_sampler=new_node_test_neg_edge_sampler,
                                                                                      evaluate_data=new_node_test_data,
@@ -474,6 +581,9 @@ if __name__ == "__main__":
         with open(save_result_path, 'w') as file:
             file.write(result_json)
 
+        stop_time = time.time()
+        time_cost_list.append(stop_time - current_time)
+
     # store the average metrics at the log of the last run
     logger.info(f'metrics over {args.num_runs} runs:')
 
@@ -497,5 +607,9 @@ if __name__ == "__main__":
         logger.info(f'new node test {metric_name}, {[new_node_test_metric_single_run[metric_name] for new_node_test_metric_single_run in new_node_test_metric_all_runs]}')
         logger.info(f'average new node test {metric_name}, {np.mean([new_node_test_metric_single_run[metric_name] for new_node_test_metric_single_run in new_node_test_metric_all_runs]):.4f} '
                     f'± {np.std([new_node_test_metric_single_run[metric_name] for new_node_test_metric_single_run in new_node_test_metric_all_runs], ddof=1):.4f}')
+
+    for i in time_cost_list:
+        logger.info(f'No.{i}\'s run cost time: {i:.2f} seconds')
+    logger.info(f'Average time cost: {np.mean(time_cost_list):.2f} seconds')
 
     sys.exit()

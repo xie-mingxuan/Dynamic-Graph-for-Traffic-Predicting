@@ -11,11 +11,13 @@ def get_link_prediction_args(is_evaluation: bool = False):
     """
     # arguments
     parser = argparse.ArgumentParser('Interface for the link prediction task')
-    parser.add_argument('--dataset_name', type=str, help='dataset to be used', default='wikipedia',
-                        choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci', 'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts'])
-    parser.add_argument('--batch_size', type=int, default=200, help='batch size')
-    parser.add_argument('--model_name', type=str, default='DyGFormer', help='name of the model, note that EdgeBank is only applicable for evaluation',
-                        choices=['JODIE', 'DyRep', 'TGAT', 'TGN', 'CAWN', 'EdgeBank', 'TCL', 'GraphMixer', 'DyGFormer'])
+    parser.add_argument('--dataset_name', type=str, help='dataset to be used', default='t018',
+                        choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci', 'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts', 't000', 't018', 't483'])
+    parser.add_argument('--batch_size', type=int, default=2, help='batch size')
+    parser.add_argument('--timestamp_gap', type=int, default=1000, help='time gap for batch choose')
+    parser.add_argument('--model_name', type=str, default='DyGSP', help='name of the model, note that EdgeBank is only applicable for evaluation',
+                        choices=['JODIE', 'DyRep', 'TGAT', 'TGN', 'CAWN', 'EdgeBank', 'TCL', 'GraphMixer', 'DyGFormer', 'DyGSP', 'LSTM', 'GRU', 'TOP', 'PersonalTOP', 'DyGPP', 'DyGSP-transformer', 'DyGSP-LSTM', 'DyGSP-MLP',
+                                 'DyGSP-wo-node', 'DyGSP-wo-edge', 'DyGSP-wo-time', 'DyGSP-wo-neighbour', 'DyGSP-wo-neighbour-self', 'DyGSP-wo-neighbour-cross'])
     parser.add_argument('--gpu', type=int, default=0, help='number of gpu to use')
     parser.add_argument('--num_neighbors', type=int, default=20, help='number of neighbors to sample for each node')
     parser.add_argument('--sample_neighbor_strategy', type=str, default='recent', choices=['uniform', 'recent', 'time_interval_aware'], help='how to sample historical neighbors')
@@ -24,11 +26,11 @@ def get_link_prediction_args(is_evaluation: bool = False):
                         'it works when sample_neighbor_strategy == time_interval_aware')
     parser.add_argument('--num_walk_heads', type=int, default=8, help='number of heads used for the attention in walk encoder')
     parser.add_argument('--num_heads', type=int, default=2, help='number of heads used in attention layer')
-    parser.add_argument('--num_layers', type=int, default=2, help='number of model layers')
+    parser.add_argument('--num_layers', type=int, default=1, help='number of model layers')
     parser.add_argument('--walk_length', type=int, default=1, help='length of each random walk')
     parser.add_argument('--time_gap', type=int, default=2000, help='time gap for neighbors to compute node features')
     parser.add_argument('--time_feat_dim', type=int, default=100, help='dimension of the time embedding')
-    parser.add_argument('--position_feat_dim', type=int, default=172, help='dimension of the position embedding')
+    parser.add_argument('--position_feat_dim', type=int, default=392, help='dimension of the position embedding')
     parser.add_argument('--edge_bank_memory_mode', type=str, default='unlimited_memory', help='how memory of EdgeBank works',
                         choices=['unlimited_memory', 'time_window_memory', 'repeat_threshold_memory'])
     parser.add_argument('--time_window_mode', type=str, default='fixed_proportion', help='how to select the time window size for time window memory',
@@ -244,7 +246,7 @@ def get_node_classification_args():
     # arguments
     parser = argparse.ArgumentParser('Interface for the node classification task')
     parser.add_argument('--dataset_name', type=str, help='dataset to be used', default='wikipedia', choices=['wikipedia', 'reddit'])
-    parser.add_argument('--batch_size', type=int, default=200, help='batch size')
+    parser.add_argument('--batch_size', type=int, default=100, help='batch size')
     parser.add_argument('--model_name', type=str, default='DyGFormer', help='name of the model',
                         choices=['JODIE', 'DyRep', 'TGAT', 'TGN', 'CAWN', 'TCL', 'GraphMixer', 'DyGFormer'])
     parser.add_argument('--gpu', type=int, default=0, help='number of gpu to use')

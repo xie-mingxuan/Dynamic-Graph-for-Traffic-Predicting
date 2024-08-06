@@ -1,25 +1,32 @@
-import logging
-import time
-import sys
-import os
-import numpy as np
-import warnings
 import json
+import logging
+import os
+import sys
+import time
+import warnings
+
+import numpy as np
 import torch.nn as nn
 
-from models.TGAT import TGAT
-from models.MemoryModel import MemoryModel, compute_src_dst_node_time_shifts
-from models.CAWN import CAWN
-from models.TCL import TCL
-from models.GraphMixer import GraphMixer
-from models.DyGFormer import DyGFormer
-from models.modules import MergeLayer
-from utils.utils import set_random_seed, convert_to_gpu, get_parameter_sizes
-from utils.utils import get_neighbor_sampler, NegativeEdgeSampler
 from evaluate_models_utils import evaluate_model_link_prediction, evaluate_edge_bank_link_prediction
-from utils.DataLoader import get_idx_data_loader, get_link_prediction_data
+from models.CAWN import CAWN
+from models.DyGFormer import DyGFormer
+from models.DyGPP import DyGPPModel
+from models.DyGSP import DyGSPModel
+from models.GRU import GRUModel
+from models.GraphMixer import GraphMixer
+from models.LSTMModel import LSTMModel
+from models.MemoryModel import MemoryModel, compute_src_dst_node_time_shifts
+from models.PersonalTOP import PersonalTOPModel
+from models.TCL import TCL
+from models.TGAT import TGAT
+from models.TOP import TOPModel
+from models.modules import MergeLayer
+from utils.DataLoader import get_link_prediction_data, get_idx_time_based_data_loader
 from utils.EarlyStopping import EarlyStopping
 from utils.load_configs import get_link_prediction_args
+from utils.utils import get_neighbor_sampler, NegativeEdgeSampler
+from utils.utils import set_random_seed, convert_to_gpu, get_parameter_sizes
 
 if __name__ == "__main__":
 
@@ -35,6 +42,11 @@ if __name__ == "__main__":
     # initialize validation and test neighbor sampler to retrieve temporal graph
     full_neighbor_sampler = get_neighbor_sampler(data=full_data, sample_neighbor_strategy=args.sample_neighbor_strategy,
                                                  time_scaling_factor=args.time_scaling_factor, seed=1)
+
+    sequence_model_sampler = get_neighbor_sampler(data=full_data, sample_neighbor_strategy=args.sample_neighbor_strategy,
+                                                  time_scaling_factor=args.time_scaling_factor, seed=1, type="all")
+
+    evaluate_sampler = sequence_model_sampler if args.model_name in ['LSTM', 'GRU'] else full_neighbor_sampler
 
     # initialize negative samplers, set seeds for validation and testing so negatives are the same across different runs
     # in the inductive setting, negatives are sampled only amongst other new nodes
@@ -58,10 +70,14 @@ if __name__ == "__main__":
         new_node_test_neg_edge_sampler = NegativeEdgeSampler(src_node_ids=new_node_test_data.src_node_ids, dst_node_ids=new_node_test_data.dst_node_ids, seed=3)
 
     # get data loaders
-    val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    new_node_val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
-    new_node_test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    val_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=val_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    new_node_val_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=new_node_val_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    test_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=test_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    new_node_test_idx_data_loader = get_idx_time_based_data_loader(timestamp_list=new_node_test_data.node_interact_times, time_gap=args.timestamp_gap, shuffle=False)
+    # val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    # new_node_val_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_val_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    # test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
+    # new_node_test_idx_data_loader = get_idx_data_loader(indices_list=list(range(len(new_node_test_data.src_node_ids))), batch_size=args.batch_size, shuffle=False)
 
     # we separately evaluate EdgeBank, since EdgeBank does not contain any trainable parameters and has a different evaluation pipeline
     if args.model_name == 'EdgeBank':
@@ -76,8 +92,8 @@ if __name__ == "__main__":
             set_random_seed(seed=run)
 
             args.seed = run
-            args.load_model_name = f'{args.model_name}_seed{args.seed}'
-            args.save_result_name = f'{args.negative_sample_strategy}_negative_sampling_{args.model_name}_seed{args.seed}'
+            args.load_model_name = f'{args.model_name}_seed{args.seed}_len{args.max_input_sequence_length}'
+            args.save_result_name = f'{args.negative_sample_strategy}_negative_sampling_{args.model_name}_seed{args.seed}_len{args.max_input_sequence_length}'
 
             # set up logger
             logging.basicConfig(level=logging.INFO)
@@ -131,6 +147,73 @@ if __name__ == "__main__":
                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+            elif args.model_name == 'DyGSP':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+            elif args.model_name == 'DyGPP':
+                dynamic_backbone = DyGPPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+            elif args.model_name == 'DyGSP-transformer':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, encoder="transformer")
+            elif args.model_name == 'DyGSP-LSTM':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, encoder="LSTM")
+            elif args.model_name == 'DyGSP-MLP':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, encoder="MLP")
+            elif args.model_name == 'DyGSP-wo-node':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, without='node', encoder="MLP")
+            elif args.model_name == 'DyGSP-wo-edge':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, without='edge', encoder="MLP")
+            elif args.model_name == 'DyGSP-wo-time':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, without='time', encoder="MLP")
+            elif args.model_name == 'DyGSP-wo-neighbour':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, without='neighbour', encoder="MLP")
+            elif args.model_name == 'DyGSP-wo-neighbour-self':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, ablation='self', encoder="MLP")
+            elif args.model_name == 'DyGSP-wo-neighbour-cross':
+                dynamic_backbone = DyGSPModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
+                                              time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
+                                              num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
+                                              max_input_sequence_length=args.max_input_sequence_length, device=args.device, ablation='cross', encoder="MLP")
+            elif args.model_name == 'LSTM':
+                dynamic_backbone = LSTMModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=sequence_model_sampler,
+                                             time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, num_layers=args.num_layers,
+                                             dropout=args.dropout, max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+            elif args.model_name == 'GRU':
+                dynamic_backbone = GRUModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=sequence_model_sampler,
+                                            time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, num_layers=args.num_layers,
+                                            dropout=args.dropout, max_input_sequence_length=args.max_input_sequence_length, device=args.device)
+            elif args.model_name == 'TOP':
+                dynamic_backbone = TOPModel()
+            elif args.model_name == 'PersonalTOP':
+                dynamic_backbone = PersonalTOPModel()
             else:
                 raise ValueError(f"Wrong value for model_name {args.model_name}!")
             link_predictor = MergeLayer(input_dim1=node_raw_features.shape[1], input_dim2=node_raw_features.shape[1],
@@ -164,7 +247,7 @@ if __name__ == "__main__":
             if args.model_name not in ['JODIE', 'DyRep', 'TGN']:
                 val_losses, val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                          model=model,
-                                                                         neighbor_sampler=full_neighbor_sampler,
+                                                                         neighbor_sampler=evaluate_sampler,
                                                                          evaluate_idx_data_loader=val_idx_data_loader,
                                                                          evaluate_neg_edge_sampler=val_neg_edge_sampler,
                                                                          evaluate_data=val_data,
@@ -174,7 +257,7 @@ if __name__ == "__main__":
 
                 new_node_val_losses, new_node_val_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                            model=model,
-                                                                                           neighbor_sampler=full_neighbor_sampler,
+                                                                                           neighbor_sampler=evaluate_sampler,
                                                                                            evaluate_idx_data_loader=new_node_val_idx_data_loader,
                                                                                            evaluate_neg_edge_sampler=new_node_val_neg_edge_sampler,
                                                                                            evaluate_data=new_node_val_data,
@@ -188,7 +271,7 @@ if __name__ == "__main__":
 
             test_losses, test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                        model=model,
-                                                                       neighbor_sampler=full_neighbor_sampler,
+                                                                       neighbor_sampler=evaluate_sampler,
                                                                        evaluate_idx_data_loader=test_idx_data_loader,
                                                                        evaluate_neg_edge_sampler=test_neg_edge_sampler,
                                                                        evaluate_data=test_data,
@@ -202,7 +285,7 @@ if __name__ == "__main__":
 
             new_node_test_losses, new_node_test_metrics = evaluate_model_link_prediction(model_name=args.model_name,
                                                                                          model=model,
-                                                                                         neighbor_sampler=full_neighbor_sampler,
+                                                                                         neighbor_sampler=evaluate_sampler,
                                                                                          evaluate_idx_data_loader=new_node_test_idx_data_loader,
                                                                                          evaluate_neg_edge_sampler=new_node_test_neg_edge_sampler,
                                                                                          evaluate_data=new_node_test_data,

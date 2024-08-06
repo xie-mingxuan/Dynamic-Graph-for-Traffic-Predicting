@@ -36,7 +36,8 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
     assert evaluate_neg_edge_sampler.seed is not None
     evaluate_neg_edge_sampler.reset_random_state()
 
-    if model_name in ['DyRep', 'TGAT', 'TGN', 'CAWN', 'TCL', 'GraphMixer', 'DyGFormer']:
+    if model_name in ['DyRep', 'TGAT', 'TGN', 'CAWN', 'TCL', 'GraphMixer', 'DyGFormer', 'DyGSP', 'LSTM', 'GRU', 'DyGSP-transformer', 'DyGSP-LSTM', 'DyGSP-MLP', 'DyGPP',
+                      'DyGSP-wo-node', 'DyGSP-wo-edge', 'DyGSP-wo-time', 'DyGSP-wo-neighbour', 'DyGSP-wo-neighbour-self', 'DyGSP-wo-neighbour-cross']:
         # evaluation phase use all the graph information
         model[0].set_neighbor_sampler(neighbor_sampler)
 
@@ -49,8 +50,23 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
         for batch_idx, evaluate_data_indices in enumerate(evaluate_idx_data_loader_tqdm):
             evaluate_data_indices = evaluate_data_indices.numpy()
             batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids = \
-                evaluate_data.src_node_ids[evaluate_data_indices],  evaluate_data.dst_node_ids[evaluate_data_indices], \
-                evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices]
+                evaluate_data.src_node_ids[evaluate_data_indices][0], evaluate_data.dst_node_ids[evaluate_data_indices][0], \
+                    evaluate_data.node_interact_times[evaluate_data_indices][0], evaluate_data.edge_ids[evaluate_data_indices][0]
+
+            # batch_neg_src_node_ids = np.repeat(batch_src_node_ids, 391)
+            # batch_neg_dst_node_ids = np.zeros_like(batch_neg_src_node_ids)
+            # batch_neg_node_interact_times = np.repeat(batch_node_interact_times, 391)
+            # for i in range(len(batch_src_node_ids)):
+            #     label = True
+            #     for j in range(1, 393):
+            #         if j == batch_dst_node_ids[i]:
+            #             label = False
+            #             continue
+            #         if label:
+            #             batch_neg_dst_node_ids[i * 391 + j - 1] = j
+            #         else:
+            #             batch_neg_dst_node_ids[i * 391 + j - 2] = j
+            # assert len(batch_neg_src_node_ids) == len(batch_neg_dst_node_ids)
 
             if evaluate_neg_edge_sampler.negative_sample_strategy != 'random':
                 batch_neg_src_node_ids, batch_neg_dst_node_ids = evaluate_neg_edge_sampler.sample(size=len(batch_src_node_ids),
@@ -120,7 +136,8 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                                                                       node_interact_times=batch_node_interact_times,
                                                                       num_neighbors=num_neighbors,
                                                                       time_gap=time_gap)
-            elif model_name in ['DyGFormer']:
+            elif model_name in ['DyGFormer', 'DyGSP', 'LSTM', 'GRU', 'DyGSP-transformer', 'DyGSP-LSTM', 'DyGSP-MLP', 'DyGPP',
+                                'DyGSP-wo-node', 'DyGSP-wo-edge', 'DyGSP-wo-time', 'DyGSP-wo-neighbour', 'DyGSP-wo-neighbour-self', 'DyGSP-wo-neighbour-cross']:
                 # get temporal embedding of source and destination nodes
                 # two Tensors, with shape (batch_size, node_feat_dim)
                 batch_src_node_embeddings, batch_dst_node_embeddings = \
@@ -134,11 +151,20 @@ def evaluate_model_link_prediction(model_name: str, model: nn.Module, neighbor_s
                     model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_neg_src_node_ids,
                                                                       dst_node_ids=batch_neg_dst_node_ids,
                                                                       node_interact_times=batch_node_interact_times)
+            elif model_name in ['TOP', 'PersonalTOP']:
+                negative_probabilities = model[0].get_possibility(src_node_ids=batch_neg_src_node_ids,
+                                                                  dst_node_ids=batch_neg_dst_node_ids,
+                                                                  get_on_off_labels=evaluate_data.labels[evaluate_data_indices][0],
+                                                                  negative_sampling=True)
+                positive_probabilities = model[0].get_possibility(src_node_ids=batch_src_node_ids,
+                                                         dst_node_ids=batch_dst_node_ids,
+                                                         get_on_off_labels=evaluate_data.labels[evaluate_data_indices][0])
             else:
                 raise ValueError(f"Wrong value for model_name {model_name}!")
-            # get positive and negative probabilities, shape (batch_size, )
-            positive_probabilities = model[1](input_1=batch_src_node_embeddings, input_2=batch_dst_node_embeddings).squeeze(dim=-1).sigmoid()
-            negative_probabilities = model[1](input_1=batch_neg_src_node_embeddings, input_2=batch_neg_dst_node_embeddings).squeeze(dim=-1).sigmoid()
+            if model_name not in ['TOP', 'PersonalTOP']:
+                # get positive and negative probabilities, shape (batch_size, )
+                positive_probabilities = model[1](input_1=batch_src_node_embeddings, input_2=batch_dst_node_embeddings).squeeze(dim=-1).sigmoid()
+                negative_probabilities = model[1](input_1=batch_neg_src_node_embeddings, input_2=batch_neg_dst_node_embeddings).squeeze(dim=-1).sigmoid()
 
             predicts = torch.cat([positive_probabilities, negative_probabilities], dim=0)
             labels = torch.cat([torch.ones_like(positive_probabilities), torch.zeros_like(negative_probabilities)], dim=0)
@@ -181,8 +207,8 @@ def evaluate_model_node_classification(model_name: str, model: nn.Module, neighb
         for batch_idx, evaluate_data_indices in enumerate(evaluate_idx_data_loader_tqdm):
             evaluate_data_indices = evaluate_data_indices.numpy()
             batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids, batch_labels = \
-                evaluate_data.src_node_ids[evaluate_data_indices],  evaluate_data.dst_node_ids[evaluate_data_indices], \
-                evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices], evaluate_data.labels[evaluate_data_indices]
+                evaluate_data.src_node_ids[evaluate_data_indices], evaluate_data.dst_node_ids[evaluate_data_indices], \
+                    evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices], evaluate_data.labels[evaluate_data_indices]
 
             if model_name in ['TGAT', 'CAWN', 'TCL']:
                 # get temporal embedding of source and destination nodes
@@ -310,7 +336,7 @@ def evaluate_edge_bank_link_prediction(args: argparse.Namespace, train_data: Dat
             test_data_indices = test_data_indices.numpy()
             batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times = \
                 test_data.src_node_ids[test_data_indices], test_data.dst_node_ids[test_data_indices], \
-                test_data.node_interact_times[test_data_indices]
+                    test_data.node_interact_times[test_data_indices]
 
             if test_neg_edge_sampler.negative_sample_strategy != 'random':
                 batch_neg_src_node_ids, batch_neg_dst_node_ids = test_neg_edge_sampler.sample(size=len(batch_src_node_ids),
@@ -372,7 +398,7 @@ def evaluate_edge_bank_link_prediction(args: argparse.Namespace, train_data: Dat
 
         # save model result
         result_json = {
-            "test metrics": {metric_name: f'{test_metric_dict[metric_name]:.4f}'for metric_name in test_metric_dict}
+            "test metrics": {metric_name: f'{test_metric_dict[metric_name]:.4f}' for metric_name in test_metric_dict}
         }
         result_json = json.dumps(result_json, indent=4)
 
