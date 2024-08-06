@@ -26,9 +26,10 @@ class EarlyStopping(object):
             # path to additionally save the nonparametric data (e.g., tensors) in memory-based models (e.g., JODIE, DyRep, TGN)
             self.save_model_nonparametric_data_path = os.path.join(save_model_folder, f"{save_model_name}_nonparametric_data.pkl")
 
-    def step(self, metrics: list, model: nn.Module):
+    def step(self, metrics: list, model: nn.Module, multi_gpu_label: bool = False):
         """
         execute the early stop strategy for each evaluation process
+        :param multi_gpu_label:
         :param metrics: list, list of metrics, each element is a tuple (str, float, boolean) -> (metric_name, metric_value, whether higher means better)
         :param model: nn.Module
         :return:
@@ -52,7 +53,7 @@ class EarlyStopping(object):
             for metric_tuple in metrics:
                 metric_name, metric_value = metric_tuple[0], metric_tuple[1]
                 self.best_metrics[metric_name] = metric_value
-            self.save_checkpoint(model)
+            self.save_checkpoint(model, multi_gpu_label=multi_gpu_label)
             self.counter = 0
         # metrics are not better at the epoch
         else:
@@ -62,18 +63,22 @@ class EarlyStopping(object):
 
         return self.early_stop
 
-    def save_checkpoint(self, model: nn.Module):
+    def save_checkpoint(self, model: nn.Module, multi_gpu_label: bool = False):
         """
         saves model at self.save_model_path
+        :param multi_gpu_label:
         :param model: nn.Module
         :return:
         """
         self.logger.info(f"save model {self.save_model_path}")
         torch.save(model.state_dict(), self.save_model_path)
         if self.model_name in ['JODIE', 'DyRep', 'TGN']:
-            torch.save(model[0].memory_bank.node_raw_messages, self.save_model_nonparametric_data_path)
+            if multi_gpu_label:
+                torch.save(model.module[0].memory_bank.node_raw_messages, self.save_model_nonparametric_data_path)
+            else:
+                torch.save(model[0].memory_bank.node_raw_messages, self.save_model_nonparametric_data_path)
 
-    def load_checkpoint(self, model: nn.Module, map_location: str = None):
+    def load_checkpoint(self, model: nn.Module, map_location: str = None, multi_gpu_label: bool = False):
         """
         load model at self.save_model_path
         :param model: nn.Module
@@ -83,4 +88,7 @@ class EarlyStopping(object):
         self.logger.info(f"load model {self.save_model_path}")
         model.load_state_dict(torch.load(self.save_model_path, map_location=map_location))
         if self.model_name in ['JODIE', 'DyRep', 'TGN']:
-            model[0].memory_bank.node_raw_messages = torch.load(self.save_model_nonparametric_data_path, map_location=map_location)
+            if multi_gpu_label:
+                model.module[0].memory_bank.node_raw_messages = torch.load(self.save_model_nonparametric_data_path, map_location=map_location)
+            else:
+                model[0].memory_bank.node_raw_messages = torch.load(self.save_model_nonparametric_data_path, map_location=map_location)

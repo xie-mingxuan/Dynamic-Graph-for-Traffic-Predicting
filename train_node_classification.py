@@ -10,12 +10,9 @@ import json
 import torch
 import torch.nn as nn
 
-from models.TGAT import TGAT
 from models.MemoryModel import MemoryModel, compute_src_dst_node_time_shifts
-from models.CAWN import CAWN
-from models.TCL import TCL
-from models.GraphMixer import GraphMixer
-from models.DyGFormer import DyGFormer
+
+from models.TrafficLoss import TrafficLoss
 from models.modules import MergeLayer, MLPClassifier
 from utils.utils import set_random_seed, convert_to_gpu, get_parameter_sizes, create_optimizer
 from utils.utils import get_neighbor_sampler
@@ -80,10 +77,7 @@ if __name__ == "__main__":
         logger.info(f'configuration is {args}')
 
         # create model
-        if args.model_name == 'TGAT':
-            dynamic_backbone = TGAT(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
-                                    time_feat_dim=args.time_feat_dim, num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout, device=args.device)
-        elif args.model_name in ['JODIE', 'DyRep', 'TGN']:
+        if args.model_name in ['JODIE', 'DyRep', 'TGN']:
             # four floats that represent the mean and standard deviation of source and destination node time shifts in the training data, which is used for JODIE
             src_node_mean_time_shift, src_node_std_time_shift, dst_node_mean_time_shift_dst, dst_node_std_time_shift = \
                 compute_src_dst_node_time_shifts(train_data.src_node_ids, train_data.dst_node_ids, train_data.node_interact_times)
@@ -91,22 +85,6 @@ if __name__ == "__main__":
                                            time_feat_dim=args.time_feat_dim, model_name=args.model_name, num_layers=args.num_layers, num_heads=args.num_heads,
                                            dropout=args.dropout, src_node_mean_time_shift=src_node_mean_time_shift, src_node_std_time_shift=src_node_std_time_shift,
                                            dst_node_mean_time_shift_dst=dst_node_mean_time_shift_dst, dst_node_std_time_shift=dst_node_std_time_shift, device=args.device)
-        elif args.model_name == 'CAWN':
-            dynamic_backbone = CAWN(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
-                                    time_feat_dim=args.time_feat_dim, position_feat_dim=args.position_feat_dim, walk_length=args.walk_length,
-                                    num_walk_heads=args.num_walk_heads, dropout=args.dropout, device=args.device)
-        elif args.model_name == 'TCL':
-            dynamic_backbone = TCL(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
-                                   time_feat_dim=args.time_feat_dim, num_layers=args.num_layers, num_heads=args.num_heads,
-                                   num_depths=args.num_neighbors + 1, dropout=args.dropout, device=args.device)
-        elif args.model_name == 'GraphMixer':
-            dynamic_backbone = GraphMixer(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
-                                          time_feat_dim=args.time_feat_dim, num_tokens=args.num_neighbors, num_layers=args.num_layers, dropout=args.dropout, device=args.device)
-        elif args.model_name == 'DyGFormer':
-            dynamic_backbone = DyGFormer(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=full_neighbor_sampler,
-                                         time_feat_dim=args.time_feat_dim, channel_embedding_dim=args.channel_embedding_dim, patch_size=args.patch_size,
-                                         num_layers=args.num_layers, num_heads=args.num_heads, dropout=args.dropout,
-                                         max_input_sequence_length=args.max_input_sequence_length, device=args.device)
         else:
             raise ValueError(f"Wrong value for model_name {args.model_name}!")
         link_predictor = MergeLayer(input_dim1=node_raw_features.shape[1], input_dim2=node_raw_features.shape[1],
@@ -145,7 +123,9 @@ if __name__ == "__main__":
         early_stopping = EarlyStopping(patience=args.patience, save_model_folder=save_model_folder,
                                        save_model_name=args.save_model_name, logger=logger, model_name=args.model_name)
 
-        loss_func = nn.BCELoss()
+        # convert loss function to TrafficLoss
+        # loss_func = nn.BCELoss()
+        loss_func = TrafficLoss()
 
         # set the dynamic_backbone in evaluation mode
         model[0].eval()
@@ -167,7 +147,7 @@ if __name__ == "__main__":
                 train_data_indices = train_data_indices.numpy()
                 batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids, batch_labels = \
                     train_data.src_node_ids[train_data_indices], train_data.dst_node_ids[train_data_indices], train_data.node_interact_times[train_data_indices], \
-                    train_data.edge_ids[train_data_indices], train_data.labels[train_data_indices]
+                        train_data.edge_ids[train_data_indices], train_data.labels[train_data_indices]
 
                 with torch.no_grad():
                     if args.model_name in ['TGAT', 'CAWN', 'TCL']:
